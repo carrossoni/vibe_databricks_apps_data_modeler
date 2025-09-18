@@ -1,0 +1,27 @@
+# Databricks Bundle Configuration for Bricks Data Modeler App
+bundle:
+  name: bricks-data-modeler
+
+# Workspace configuration
+workspace:
+  profile: DEFAULT
+
+# Bundle variables
+variables:
+  warehouse_id:
+    description: Warehouse for SQL execution
+    default: ""
+
+# Resources definition
+resources:
+  apps:
+    bricks-data-modeler:
+      name: bricks-data-modeler
+      description: "Visual data modeling tool for Databricks Unity Catalog with ERD design, DDL generation, and direct table/view creation"
+      source_code_path: "."
+
+# Environments (simplified to avoid deprecated fields)
+environments:
+  default:
+    workspace:
+      profile: DEFAULT

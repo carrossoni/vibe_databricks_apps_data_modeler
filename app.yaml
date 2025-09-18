@@ -1,0 +1,10 @@
+command: [
+  "python", 
+  "app.py"
+]
+
+env:
+  - name: "FLASK_ENV"
+    value: "production"
+  - name: "PYTHONPATH"
+    value: ".:backend"

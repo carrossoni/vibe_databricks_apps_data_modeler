@@ -1,0 +1,21 @@
+# Databricks Apps Requirements
+# Core Databricks dependencies
+databricks-sdk>=0.18.0
+databricks-sql-connector>=3.0.0
+
+# Web framework
+flask>=2.3.0
+flask-cors>=4.0.0
+
+# Data processing and validation
+pydantic>=2.0.0
+pyyaml>=6.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Development dependencies (optional)
+pytest>=7.0.0
+black>=23.0.0
+isort>=5.12.0
