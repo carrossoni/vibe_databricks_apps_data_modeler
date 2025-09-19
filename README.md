@@ -53,8 +53,11 @@ Before deploying the Bricks Data Modeler, ensure you have:
 The app requires the following OAuth scopes:
 
 - `sql`: Execute SQL statements and manage SQL resources
-- `iam.current-user:read`: Read current user information
-- `iam.access-control:read`: Read access control information
+- `catalog.tables:read`: Allows the app to read tables in Unity Catalog.
+- `catalog.schemas:read`: Allows the app to read schemas in Unity Catalog.
+- `catalog.catalogs:read`: Allows the app to read catalogs in Unity Catalog.
+- `iam.current-user:read`: Read current user information (default)
+- `iam.access-control:read`: Read access control information (default)
 
 ## 🚀 Quick Start
 
@@ -111,13 +114,6 @@ The app can be configured using the following environment variables:
 - `app.yaml`: Databricks App runtime configuration
 - `requirements.txt`: Python dependencies
 
-### Custom Configuration
-
-To customize the app for your environment:
-
-1. **Modify `databricks.yml`**: Update bundle name, workspace profile, or resource configuration
-2. **Update OAuth Scopes**: Modify scopes in the Databricks Apps UI if needed
-3. **Configure Warehouses**: The app will automatically detect available SQL warehouses
 
 ## 📖 Usage Guide
 
@@ -228,7 +224,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📞 Support
 
-For support and questions:
+No support :) But for questions and comments:
 - Create an issue in the GitHub repository
 - Check the Databricks Community forums
 - Review Databricks Apps documentation
