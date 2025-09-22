@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 from flask import Blueprint, jsonify, request, Response
 import time
 import threading
-from queue import Queue, Empty
+from queue import Queue
 from pydantic import ValidationError
 
 from databricks_integration import DatabricksUnityService
@@ -48,6 +48,26 @@ from models import (
     DataModelYAMLSerializer, MetricView, MetricViewDimension,
     MetricViewMeasure, MetricViewJoin, MetricSourceRelationship, TraditionalView
 )
+
+def serialize_join(join):
+    """Recursively serialize a join object including nested joins"""
+    result = {
+        'id': join.id, 
+        'name': join.name, 
+        'joined_table_name': join.joined_table_name, 
+        'join_type': join.join_type, 
+        'sql_on': join.sql_on, 
+        'left_columns': join.left_columns, 
+        'right_columns': join.right_columns, 
+        'join_operators': join.join_operators, 
+        'using': join.using
+    }
+    
+    # Add nested joins if they exist
+    if join.joins and len(join.joins) > 0:
+        result['joins'] = [serialize_join(nested_join) for nested_join in join.joins]
+    
+    return result
 
 def deduplicate_imported_tables(imported_tables: List[dict]) -> List[dict]:
     """Deduplicate imported tables by full name (catalog.schema.table)"""
@@ -304,21 +324,86 @@ def _validate_traditional_view_sql(sql_query: str) -> str:
 
 
 def get_sdk_client():
-    """Get Databricks SDK client using the same authentication logic as app.py"""
+    """Get Databricks SDK client - simplified version without env var manipulation"""
     try:
-        # Import the get_databricks_client function from app.py
-        import sys
-        print(f"🔍 DEBUG: Current working directory: {os.getcwd()}")
-        print(f"🔍 DEBUG: Python path: {sys.path}")
+        # First, try to use the client injected by the main app
+        if hasattr(request, 'databricks_client') and request.databricks_client:
+            logger.info("✅ Using pre-authenticated client from request context")
+            return request.databricks_client
         
-        from app import get_databricks_client
-        print(f"🔍 DEBUG: Successfully imported get_databricks_client from app")
+        # Fallback: Try direct authentication
+        user_token = request.headers.get('x-forwarded-access-token') if request else None
+        logger.info(f"🔍 DEBUG: User token found: {'Yes' if user_token else 'No'}")
         
-        client = get_databricks_client()
-        print(f"🔍 DEBUG: get_databricks_client returned: {type(client)} - {client is not None}")
-        return client
+        if user_token:
+            logger.info("🔑 Using user authorization (on-behalf-of)")
+            host = os.getenv('DATABRICKS_SERVER_HOSTNAME') or os.getenv('DATABRICKS_HOST')
+            if host:
+                # Temporarily clear environment variables to avoid conflicts
+                original_client_id = os.environ.pop('DATABRICKS_CLIENT_ID', None)
+                original_client_secret = os.environ.pop('DATABRICKS_CLIENT_SECRET', None)
+                original_host = os.environ.pop('DATABRICKS_HOST', None)
+                
+                try:
+                    # Create client with ONLY user token using PAT auth type for OBO
+                    client = WorkspaceClient(host=host, token=user_token, auth_type="pat")
+                    logger.info("✅ Successfully created user-authenticated client (OBO)")
+                    return client
+                except Exception as e:
+                    logger.error(f"Failed to create OBO client: {e}")
+                finally:
+                    # Restore environment variables
+                    if original_client_id:
+                        os.environ['DATABRICKS_CLIENT_ID'] = original_client_id
+                    if original_client_secret:
+                        os.environ['DATABRICKS_CLIENT_SECRET'] = original_client_secret
+                    if original_host:
+                        os.environ['DATABRICKS_HOST'] = original_host
+        
+        # Fallback to service principal authentication
+        logger.info("🔑 Falling back to service principal authentication")
+        client_id = os.getenv('DATABRICKS_CLIENT_ID')
+        client_secret = os.getenv('DATABRICKS_CLIENT_SECRET')
+        host = os.getenv('DATABRICKS_SERVER_HOSTNAME') or os.getenv('DATABRICKS_HOST')
+        
+        if client_id and client_secret and host:
+            try:
+                client = WorkspaceClient(
+                    host=host,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    auth_type="oauth-m2m"
+                )
+                logger.info("✅ Successfully created service principal client")
+                return client
+            except Exception as e:
+                logger.error(f"Failed to create service principal client: {e}")
+        
+        # Final fallback to environment variables (for local development)
+        host = os.getenv('DATABRICKS_HOST')
+        token = os.getenv('DATABRICKS_TOKEN')
+        
+        if host and token:
+            try:
+                client = WorkspaceClient(host=host, token=token)
+                logger.info("✅ Successfully created client from env vars")
+                return client
+            except Exception as e:
+                logger.error(f"Failed to create client from env vars: {e}")
+        
+        # Try default profile as last resort
+        try:
+            client = WorkspaceClient()
+            logger.info("✅ Successfully created client from default profile")
+            return client
+        except:
+            pass
+        
+        logger.error("❌ No valid authentication method available")
+        return None
+        
     except Exception as e:
-        print(f"❌ DEBUG: Error in get_sdk_client: {e}")
+        logger.error(f"❌ Error creating Databricks client: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -350,76 +435,40 @@ def send_progress_update(session_id: str, update: dict):
 
 
 def get_progress_updates(session_id: str):
-    """Generator for progress updates with proper disconnect handling"""
+    """Generator for progress updates"""
     if session_id not in progress_sessions:
         return
     
     queue = progress_sessions[session_id]
     print(f"📡 Starting SSE stream for session {session_id}")
     
+    # Send immediate ping to establish connection
+    yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id})}\n\n"
+    
     try:
-        # Send immediate ping to establish connection
-        yield f"data: {json.dumps({'type': 'connected', 'session_id': session_id})}\n\n"
-        
-        heartbeat_counter = 0
-        max_heartbeats = 120  # Maximum 120 heartbeats (60 minutes at 30s intervals)
-        
         while True:
             try:
-                # Wait for update with shorter timeout
-                update = queue.get(timeout=10)  # Reduced timeout to 10 seconds
+                # Wait for update with timeout - increased for cross-catalog imports
+                update = queue.get(timeout=120)  # 120 second timeout for large imports
                 if update is None:  # End signal
                     print(f"📡 End signal received for session {session_id}")
-                    yield f"data: {json.dumps({'type': 'completed', 'final': True})}\n\n"
                     break
-                    
                 print(f"📡 Sending SSE update: {update}")
                 sse_data = f"data: {json.dumps(update)}\n\n"
                 yield sse_data
-                heartbeat_counter = 0  # Reset heartbeat counter on successful update
-                
-            except Empty:
-                # Send heartbeat on timeout to keep connection alive
-                heartbeat_counter += 1
-                if heartbeat_counter > max_heartbeats:
-                    print(f"📡 Maximum heartbeats reached for session {session_id}, closing")
-                    yield f"data: {json.dumps({'type': 'timeout', 'message': 'Stream timeout'})}\n\n"
-                    break
-                    
-                print(f"📡 Sending heartbeat {heartbeat_counter} for session {session_id}")
-                import time
-                heartbeat_data = f"data: {json.dumps({'type': 'heartbeat', 'timestamp': time.time(), 'count': heartbeat_counter})}\n\n"
-                yield heartbeat_data
-                
-                # Check if session was cancelled or completed
-                if session_id not in progress_sessions:
-                    print(f"📡 Session {session_id} no longer exists, ending stream")
-                    break
-                    
-            except GeneratorExit:
-                # Handle client disconnect gracefully
-                print(f"📡 Client disconnected for session {session_id}")
-                break
-                
+                # Force flush to ensure real-time delivery
+                import sys
+                sys.stdout.flush()
             except Exception as e:
-                print(f"📡 Error in SSE stream for session {session_id}: {e}")
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                print(f"⚠️ SSE timeout or error for session {session_id}: {e}")
+                # Timeout or session ended
                 break
-                
-    except GeneratorExit:
-        # Handle client disconnect at any point
-        print(f"📡 Client disconnected during stream setup for session {session_id}")
-    except Exception as e:
-        print(f"📡 Fatal error in SSE stream for session {session_id}: {e}")
     finally:
-        # Always clean up session
+        # Clean up session
         print(f"📡 Cleaning up session {session_id}")
-        try:
-            with progress_lock:
-                if session_id in progress_sessions:
-                    del progress_sessions[session_id]
-        except Exception as e:
-            print(f"📡 Error during cleanup for session {session_id}: {e}")
+        with progress_lock:
+            if session_id in progress_sessions:
+                del progress_sessions[session_id]
 
 
 
@@ -534,187 +583,59 @@ def _sort_tables_by_dependencies(tables):
 data_modeling_bp = Blueprint('data_modeling', __name__, url_prefix='/api/data_modeling')
 
 
-@data_modeling_bp.route('/project/<project_id>/apply_progress/<session_id>/poll', methods=['GET'])
-def poll_apply_progress(project_id: str, session_id: str):
-    """Polling endpoint for apply progress as fallback for SSE issues"""
-    logger.info(f"🔍 Polling apply progress for project {project_id}, session: {session_id}")
-    
-    try:
-        with progress_lock:
-            if session_id not in progress_sessions:
-                logger.info(f"❌ Session {session_id} not found")
-                return jsonify({
-                    'status': 'not_found',
-                    'session_id': session_id,
-                    'available_sessions': list(progress_sessions.keys())
-                })
-            
-            queue = progress_sessions[session_id]
-            
-        # Check if there are any pending updates in the queue
-        updates = []
-        try:
-            # Get all available updates without blocking
-            while True:
-                try:
-                    update = queue.get_nowait()
-                    if update is None:  # End signal
-                        return jsonify({
-                            'status': 'completed',
-                            'session_id': session_id,
-                            'updates': updates,
-                            'final': True
-                        })
-                    updates.append(update)
-                except Empty:
-                    # No more updates available
-                    break
-        except Exception as e:
-            logger.error(f"❌ Error getting updates from queue: {e}")
-            pass
-        
-        if updates:
-            logger.info(f"📤 Returning {len(updates)} updates for session {session_id}")
-            return jsonify({
-                'status': 'updates',
-                'session_id': session_id,
-                'updates': updates
-            })
-        else:
-            # No updates available yet
-            return jsonify({
-                'status': 'waiting',
-                'session_id': session_id,
-                'updates': []
-            })
-            
-    except Exception as e:
-        logger.error(f"❌ Error polling progress for session {session_id}: {e}")
-        return jsonify({
-            'status': 'error',
-            'session_id': session_id,
-            'error': str(e)
-        }), 500
-
-
-@data_modeling_bp.route('/test_sse', methods=['GET'])
-def test_sse():
-    """Simple SSE test endpoint"""
-    logger.info("🔍 TEST SSE endpoint called")
-    
-    def generate():
-        logger.info("🔍 TEST SSE generator started")
-        import time
-        for i in range(5):
-            yield f"data: {{\"test\": {i}, \"timestamp\": {time.time()}}}\n\n"
-            time.sleep(1)
-        yield f"data: {{\"type\": \"completed\"}}\n\n"
-    
-    response = Response(generate(), mimetype='text/event-stream')
-    response.headers['Cache-Control'] = 'no-cache'
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    logger.info("✅ TEST SSE response created")
-    return response
-
-
-@data_modeling_bp.route('/test_connection', methods=['GET'])
-def test_connection():
-    """Simple test endpoint to verify basic connectivity"""
-    logger.info("🔍 TEST CONNECTION endpoint called")
-    
-    import time
-    response_data = {
-        'status': 'success',
-        'timestamp': time.time(),
-        'message': 'API is working correctly',
-        'current_sessions': list(progress_sessions.keys()),
-        'session_count': len(progress_sessions)
-    }
-    
-    logger.info(f"✅ TEST CONNECTION response: {response_data}")
-    return jsonify(response_data)
-
-
-def progress_generator(session_id):
-    """Waits for updates and streams them as they arrive"""
-    import time
-    import json
-    
-    try:
-        logger.info(f"🔄 Starting progress generator for session {session_id}")
-        
-        # Wait for session to be created (with timeout)
-        session_wait_timeout = 10  # seconds
-        session_wait_start = time.time()
-        
-        while session_id not in progress_sessions:
-            if time.time() - session_wait_start > session_wait_timeout:
-                logger.warning(f"⏰ Timeout waiting for session {session_id} to be created")
-                yield f"data: {json.dumps({'type': 'session_not_found', 'session_id': session_id, 'reason': 'timeout_waiting_for_creation'})}\n\n"
-                return
-            time.sleep(0.1)  # Wait 100ms before checking again
-        
-        logger.info(f"✅ Session {session_id} found, starting stream")
-            
-        queue = progress_sessions[session_id]
-        updates_sent = 0
-        max_wait_time = 30  # Maximum wait time in seconds
-        start_time = time.time()
-        
-        while True:
-            try:
-                # Wait for update with timeout
-                update = queue.get(timeout=1.0)
-                
-                if update is None:  # End signal
-                    logger.info(f"✅ Progress completed for session {session_id}. Total updates sent: {updates_sent}")
-                    yield f"data: {json.dumps({'type': 'end', 'session_id': session_id, 'timestamp': time.time()})}\n\n"
-                    # Clean up session
-                    if session_id in progress_sessions:
-                        del progress_sessions[session_id]
-                    break
-                else:
-                    # Send the update
-                    if isinstance(update, dict):
-                        yield f"data: {json.dumps(update)}\n\n"
-                        updates_sent += 1
-                        logger.info(f"📤 Generator sent update {updates_sent} for session {session_id}: {update.get('type', 'unknown')}")
-                
-            except Empty:
-                # Check if we've been waiting too long
-                if time.time() - start_time > max_wait_time:
-                    logger.warning(f"⏰ Timeout waiting for updates in session {session_id}")
-                    yield f"data: {json.dumps({'type': 'timeout', 'session_id': session_id, 'timestamp': time.time()})}\n\n"
-                    break
-                # Continue waiting for updates
-                continue
-            
-    except Exception as e:
-        logger.error(f"❌ Progress generator error for session {session_id}: {e}")
-        yield f"data: {json.dumps({'type': 'error', 'session_id': session_id, 'error': str(e), 'timestamp': time.time()})}\n\n"
-
 @data_modeling_bp.route('/project/<project_id>/apply_progress/<session_id>', methods=['GET'])
 def apply_progress_stream(project_id: str, session_id: str):
-    """Lightweight SSE streaming without complex generators"""
-    logger.info(f"🔧 Progress stream endpoint called! Project: {project_id}, Session: {session_id}")
-    logger.info(f"🔧 Current sessions: {list(progress_sessions.keys())}")
+    """Server-Sent Events endpoint for streaming apply progress"""
+    logger.info(f"🔍 SSE apply progress requested for session: {session_id}")
     
-    import json
-    import time
-    from flask import Response
+    def generate():
+        try:
+            logger.info(f"🔍 SSE generator started for session: {session_id}")
+            yield "data: {\"type\": \"connected\"}\n\n"
+        except Exception as e:
+            logger.error(f"❌ SSE generator error at start: {e}")
+            yield f"data: {{\"type\": \"error\", \"message\": \"Generator start error: {str(e)}\"}}\n\n"
+            return
+        
+        # Wait a bit for the session to be created by the apply_changes call
+        import time
+        max_wait = 30  # Wait up to 30 seconds for session to be created
+        wait_interval = 0.5  # Check every 500ms
+        waited = 0
+        
+        logger.info(f"🔍 Waiting for session {session_id} to be created...")
+        while session_id not in progress_sessions and waited < max_wait:
+            time.sleep(wait_interval)
+            waited += wait_interval
+            if waited % 5 == 0:  # Log every 5 seconds
+                logger.info(f"🔍 Still waiting for session {session_id}... ({waited}s)")
+        
+        if session_id not in progress_sessions:
+            logger.error(f"❌ Session {session_id} not found after {max_wait}s")
+            yield f"data: {{\"type\": \"error\", \"message\": \"Session {session_id} not found after {max_wait}s\"}}\n\n"
+            return
+        
+        logger.info(f"✅ Session {session_id} found, starting progress stream")
+        # Now stream the updates
+        for update in get_progress_updates(session_id):
+            yield update
     
-    return Response(
-        progress_generator(session_id),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'X-Accel-Buffering': 'no'  # Disable nginx buffering
-        }
-    )
+    try:
+        logger.info(f"🔍 Creating SSE response for session: {session_id}")
+        response = Response(generate(), mimetype='text/event-stream')
+        response.headers['Cache-Control'] = 'no-cache'
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Headers'] = 'Cache-Control'
+        response.headers['Access-Control-Allow-Methods'] = 'GET'
+        response.headers['X-Accel-Buffering'] = 'no'  # Disable nginx buffering
+        response.headers['Connection'] = 'keep-alive'
+        response.headers['Keep-Alive'] = 'timeout=300'
+        response.headers['Content-Type'] = 'text/event-stream; charset=utf-8'
+        logger.info(f"✅ SSE response created for session: {session_id}")
+        return response
+    except Exception as e:
+        logger.error(f"❌ Error creating SSE response for session {session_id}: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 # Create a directory for saved projects
@@ -751,17 +672,14 @@ def list_warehouses():
 def list_catalogs():
     """List all available Databricks catalogs"""
     try:
-        logger.info("🔍 Catalogs API called")
-        client = get_sdk_client()
-        logger.info(f"🔧 SDK Client: {'Available' if client else 'None'}")
-        
+        # Use the client injected by the main app
+        client = getattr(request, 'databricks_client', None)
         if client is None:
-            logger.warning("⚠️ No SDK client available, returning demo data")
             # Return demo/mock data when credentials are not available
             demo_catalogs = [
                 {
                     'name': 'main',
-                    'comment': 'Default catalog (Demo Mode - Configure Databricks authentication to connect)',
+                    'comment': 'Default catalog (Demo Mode - Set DATABRICKS_HOST and DATABRICKS_TOKEN to connect)',
                     'created_at': None,
                     'updated_at': None,
                     'owner': 'demo_user',
@@ -772,10 +690,8 @@ def list_catalogs():
             response.headers.add('Access-Control-Allow-Origin', '*')
             return response
             
-        logger.info("🚀 Creating Unity Service and listing catalogs...")
         unity_service = DatabricksUnityService(client)
         catalogs = unity_service.list_catalogs()
-        logger.info(f"📋 API returning {len(catalogs)} catalogs")
         
         response = jsonify(catalogs)
         response.headers.add('Access-Control-Allow-Origin', '*')
@@ -792,7 +708,8 @@ def list_catalogs():
 def list_schemas(catalog_name: str):
     """List all schemas in a catalog"""
     try:
-        client = get_sdk_client()
+        # Use the client injected by the main app
+        client = getattr(request, 'databricks_client', None)
         if client is None:
             # Return demo/mock data when credentials are not available
             demo_schemas = [
@@ -835,7 +752,8 @@ def list_schemas(catalog_name: str):
 def list_tables(catalog_name: str, schema_name: str):
     """List all tables in a schema"""
     try:
-        client = get_sdk_client()
+        # Use the client injected by the main app
+        client = getattr(request, 'databricks_client', None)
         if client is None:
             # Return demo/mock data when credentials are not available
             demo_tables = [
@@ -887,7 +805,12 @@ def list_views(catalog_name: str, schema_name: str):
     """List all views in a schema"""
     try:
         logger.info(f"🔍 Views API called for {catalog_name}.{schema_name}")
-        client = get_sdk_client()
+        # Use the client injected by the main app first, fallback to get_sdk_client if needed
+        client = getattr(request, 'databricks_client', None)
+        if not client:
+            logger.info("🔍 No injected client, trying get_sdk_client()")
+            client = get_sdk_client()
+            
         if not client:
             logger.error("❌ No SDK client available for views")
             response = jsonify({'error': 'Failed to connect to Databricks'})
@@ -940,13 +863,12 @@ def list_views(catalog_name: str, schema_name: str):
                     'updated_at': updated_at
                 })
         
-        logger.info(f"✅ Successfully processed {len(views)} views in {catalog_name}.{schema_name}")
         response = jsonify(views)
         response.headers.add('Access-Control-Allow-Origin', '*')
         return response
         
     except Exception as e:
-        logger.error(f"❌ Error listing views in {catalog_name}.{schema_name}: {e}")
+        logger.error(f"Error listing views: {e}")
         response = jsonify({'error': str(e)})
         response.headers.add('Access-Control-Allow-Origin', '*')
         return response, 500
@@ -1632,11 +1554,11 @@ def import_progress_stream(session_id: str):
         response.headers['Connection'] = 'keep-alive'
         response.headers['Keep-Alive'] = 'timeout=300'
         response.headers['Content-Type'] = 'text/event-stream; charset=utf-8'
-        logger.info(f"✅ SSE response created successfully for session: {session_id}")
+        logger.info(f"✅ SSE response created for session: {session_id}")
         return response
     except Exception as e:
-        logger.error(f"❌ Failed to create SSE response for session {session_id}: {e}")
-        return jsonify({'error': f'Failed to create SSE stream: {str(e)}'}), 500
+        logger.error(f"❌ Error creating SSE response for session {session_id}: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @data_modeling_bp.route('/import_views', methods=['POST'])
@@ -1693,28 +1615,41 @@ def import_existing_views():
                 elif isinstance(view, MetricView) and hasattr(view, 'source_table_id'):
                     # Metric views have source_table_id
                     table_refs = [view.source_table_id]
-                    # Also check joins for additional table references
+                    # Also check joins for additional table references (recursively for nested joins)
                     if hasattr(view, 'joins') and view.joins:
-                        for join in view.joins:
-                            # Try joined_table_name first (full table reference)
-                            if hasattr(join, 'joined_table_name') and join.joined_table_name:
-                                table_refs.append(join.joined_table_name)
-                                logger.info(f"🔗 Found join table: {join.joined_table_name}")
-                            # If not available, try to resolve joined_table_id to table name
-                            elif hasattr(join, 'joined_table_id') and join.joined_table_id:
-                                # Try to resolve table ID to table name using common patterns
-                                table_id = join.joined_table_id
-                                logger.info(f"🔍 Found join with table ID: {table_id}")
+                        def extract_join_table_refs_recursive(joins):
+                            refs = []
+                            for i, join in enumerate(joins):
+                                joins_attr = getattr(join, 'joins', None)
+                                joins_len = len(joins_attr) if joins_attr else 0
+                                logger.info(f"🔍 Processing join {i}: name={getattr(join, 'name', 'unknown')}, has_joins={hasattr(join, 'joins')}, joins_len={joins_len}")
+                                # Try joined_table_name first (full table reference)
+                                if hasattr(join, 'joined_table_name') and join.joined_table_name:
+                                    refs.append(join.joined_table_name)
+                                    logger.info(f"🔗 Found join table: {join.joined_table_name}")
+                                # If not available, try to resolve joined_table_id to table name
+                                elif hasattr(join, 'joined_table_id') and join.joined_table_id:
+                                    # Try to resolve table ID to table name using common patterns
+                                    table_id = join.joined_table_id
+                                    logger.info(f"🔍 Found join with table ID: {table_id}")
+                                    
+                                    # Extract table name from ID patterns like "orders-table-002" -> "orders"
+                                    if '-table-' in table_id:
+                                        table_name = table_id.split('-table-')[0]
+                                        full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
+                                        refs.append(full_table_name)
+                                        logger.info(f"🔗 Resolved table ID {table_id} -> {full_table_name}")
+                                    else:
+                                        # If it's already a full name, use it directly
+                                        refs.append(table_id)
                                 
-                                # Extract table name from ID patterns like "orders-table-002" -> "orders"
-                                if '-table-' in table_id:
-                                    table_name = table_id.split('-table-')[0]
-                                    full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
-                                    table_refs.append(full_table_name)
-                                    logger.info(f"🔗 Resolved table ID {table_id} -> {full_table_name}")
-                                else:
-                                    # If it's already a full name, use it directly
-                                    table_refs.append(table_id)
+                                # Recursively process nested joins
+                                if hasattr(join, 'joins') and join.joins:
+                                    nested_refs = extract_join_table_refs_recursive(join.joins)
+                                    refs.extend(nested_refs)
+                            return refs
+                        
+                        table_refs.extend(extract_join_table_refs_recursive(view.joins))
                 
                 # Parse table references
                 for table_ref in table_refs:
@@ -1951,7 +1886,7 @@ def import_existing_views():
                     if hasattr(view, 'source_table_id') and view.source_table_id:
                         # Check if source_table_id is a UUID (table ID) or full table reference
                         if '.' in view.source_table_id and len(view.source_table_id.split('.')) == 3:
-                            # It's a full table reference like "catalog.schema.table_name"
+                            # It's a full table reference like "carrossoni.corp_vendas.fact_vendas"
                             table_refs.append(view.source_table_id)
                         else:
                             # It's a UUID - try to find the table by ID
@@ -1965,11 +1900,19 @@ def import_existing_views():
                                         table_refs.append(f"{table_catalog}.{table_schema}.{table_name}")
                                     break
                     
-                    # Add join table references
+                    # Add join table references (recursively for nested joins)
                     if hasattr(view, 'joins') and view.joins:
-                        for join in view.joins:
-                            if hasattr(join, 'joined_table_name') and join.joined_table_name:
-                                table_refs.append(join.joined_table_name)
+                        def extract_join_table_refs(joins):
+                            refs = []
+                            for join in joins:
+                                if hasattr(join, 'joined_table_name') and join.joined_table_name:
+                                    refs.append(join.joined_table_name)
+                                # Recursively process nested joins
+                                if hasattr(join, 'joins') and join.joins:
+                                    refs.extend(extract_join_table_refs(join.joins))
+                            return refs
+                        
+                        table_refs.extend(extract_join_table_refs(view.joins))
                     
                     logger.info(f"🔍 Metric view {view.name} references tables: {table_refs}")
                     
@@ -2038,11 +1981,14 @@ def import_existing_views():
                 # Try to find the imported table that matches the source table name
                 if imported_tables:
                     source_table_name = view.source_table_id
-                    # Extract just the table name from full name like "catalog.schema.table" -> "table"
+                    # Extract just the table name from full name like "carrossoni.tpch.customer" -> "customer"
                     if '.' in source_table_name:
                         table_name_only = source_table_name.split('.')[-1]
                     else:
                         table_name_only = source_table_name
+                    
+                    logger.info(f"🔍 DEBUG: Looking for source table '{table_name_only}' for metric view '{view.name}'")
+                    logger.info(f"🔍 DEBUG: Available imported tables: {[getattr(t, 'name', 'NO_NAME') for t in imported_tables]}")
                     
                     # Find matching imported table
                     for imported_table in imported_tables:
@@ -2052,6 +1998,7 @@ def import_existing_views():
                             table_id = imported_table.get('id') if hasattr(imported_table, 'get') else getattr(imported_table, 'id', None)
                             source_table_id = table_id
                             logger.info(f"🔗 Updated metric view {view.name} source_table_id: {view.source_table_id} -> {source_table_id}")
+                            logger.info(f"🔍 DEBUG: Found matching table - name: {table_name}, id: {table_id}")
                             break
                 
                 views_data.append({
@@ -2065,7 +2012,7 @@ def import_existing_views():
                     'schema_name': view.schema_name,    # Include metric view's schema
                     'dimensions': [{'id': d.id, 'name': d.name, 'expr': d.expr} for d in view.dimensions],
                     'measures': [{'id': m.id, 'name': m.name, 'expr': m.expr, 'aggregation_type': m.aggregation_type} for m in view.measures],
-                    'joins': [{'id': j.id, 'name': j.name, 'joined_table_name': j.joined_table_name, 'join_type': j.join_type, 'sql_on': j.sql_on} for j in view.joins],
+                    'joins': [serialize_join(j) for j in view.joins],
                     'tags': view.tags,
                     'position_x': view.position_x,
                     'position_y': view.position_y,
@@ -2114,9 +2061,10 @@ def test_metric_view_parsing():
     """Test endpoint to directly parse a specific metric view and see what's happening"""
     try:
         data = request.get_json()
-        catalog_name = data.get('catalog_name', 'main')
+        catalog_name = data.get('catalog_name', 'carrossoni')
         schema_name = data.get('schema_name', 'corp_views_metric')
         view_name = data.get('view_name', 'mvw_vendas')
+        yaml_content = data.get('yaml_content')  # Allow direct YAML content
         
         logger.info(f"🔍 Testing metric view parsing for: {catalog_name}.{schema_name}.{view_name}")
         
@@ -2129,14 +2077,18 @@ def test_metric_view_parsing():
         
         service = DatabricksUnityService(client)
         
-        # Step 1: Get view definition
-        logger.info("🔍 Step 1: Getting view definition...")
-        view_definition = service._get_view_definition(catalog_name, schema_name, view_name)
-        
-        if not view_definition:
-            response = jsonify({'error': f'Could not retrieve view definition for {view_name}'})
-            response.headers.add('Access-Control-Allow-Origin', '*')
-            return response, 404
+        # Step 1: Get view definition (or use provided YAML content)
+        if yaml_content:
+            logger.info("🔍 Step 1: Using provided YAML content...")
+            view_definition = yaml_content
+        else:
+            logger.info("🔍 Step 1: Getting view definition from Databricks...")
+            view_definition = service._get_view_definition(catalog_name, schema_name, view_name)
+            
+            if not view_definition:
+                response = jsonify({'error': f'Could not retrieve view definition for {view_name}'})
+                response.headers.add('Access-Control-Allow-Origin', '*')
+                return response, 404
         
         logger.info(f"🔍 Retrieved view definition (length: {len(view_definition)})")
         logger.info(f"🔍 First 500 chars: {view_definition[:500]}...")
@@ -2160,15 +2112,31 @@ def test_metric_view_parsing():
             metric_view = service._parse_metric_view(view_name, view_definition, catalog_name, schema_name, 0)
             if metric_view:
                 logger.info(f"✅ Successfully parsed as metric view with {len(metric_view.joins)} joins")
-                joins_info = []
-                for i, join in enumerate(metric_view.joins):
-                    joins_info.append({
-                        'index': i,
+                def serialize_join_recursive(join, index):
+                    """Recursively serialize a join and its nested joins"""
+                    join_info = {
+                        'index': index,
                         'name': join.name,
                         'sql_on': join.sql_on,
                         'joined_table_name': join.joined_table_name,
-                        'join_type': join.join_type
-                    })
+                        'join_type': join.join_type,
+                        'left_columns': join.left_columns,
+                        'right_columns': join.right_columns,
+                        'join_operators': join.join_operators,
+                        'using': join.using
+                    }
+                    
+                    # Add nested joins (always include the field, even if empty)
+                    join_info['nested_joins'] = []
+                    if join.joins and len(join.joins) > 0:
+                        for nested_i, nested_join in enumerate(join.joins):
+                            join_info['nested_joins'].append(serialize_join_recursive(nested_join, nested_i))
+                    
+                    return join_info
+                
+                joins_info = []
+                for i, join in enumerate(metric_view.joins):
+                    joins_info.append(serialize_join_recursive(join, i))
                 logger.info(f"🔍 Joins: {joins_info}")
             else:
                 logger.warning("⚠️ Failed to parse as metric view")
@@ -2228,19 +2196,19 @@ def test_import_with_joins():
                 name="orders",
                 sql_on="o_orderkey = l_orderkey",
                 join_type="INNER",
-                joined_table_name="main.default.orders"
+                joined_table_name="carrossoni.tpch.orders"
             ),
             MetricViewJoin(
                 name="customer", 
                 sql_on="orders.o_custkey = customer.c_custkey",
                 join_type="LEFT",
-                joined_table_name="main.default.customer"
+                joined_table_name="carrossoni.tpch.customer"
             )
         ]
         
         test_metric_view = MetricView(
             name="test_advanced_orders_analytics",
-            source_table_id="main.default.lineitem",
+            source_table_id="carrossoni.tpch.lineitem",
             joins=joins,
             dimensions=[
                 MetricViewDimension(name="order_date", expr="orders.o_orderdate")
@@ -2252,7 +2220,7 @@ def test_import_with_joins():
         
         # Test the auto-import logic
         imported_views = [test_metric_view]
-        catalog_name = "main"
+        catalog_name = "carrossoni"
         schema_name = "tpch"
         auto_import_dependencies = True
         
@@ -2266,9 +2234,18 @@ def test_import_with_joins():
                 if isinstance(view, MetricView) and hasattr(view, 'source_table_id'):
                     table_refs = [view.source_table_id]
                     if hasattr(view, 'joins') and view.joins:
-                        for join in view.joins:
-                            if hasattr(join, 'joined_table_name') and join.joined_table_name:
-                                table_refs.append(join.joined_table_name)
+                        # Recursively extract table references from nested joins
+                        def extract_join_table_refs(joins):
+                            refs = []
+                            for join in joins:
+                                if hasattr(join, 'joined_table_name') and join.joined_table_name:
+                                    refs.append(join.joined_table_name)
+                                # Recursively process nested joins
+                                if hasattr(join, 'joins') and join.joins:
+                                    refs.extend(extract_join_table_refs(join.joins))
+                            return refs
+                        
+                        table_refs.extend(extract_join_table_refs(view.joins))
                 
                 for table_ref in table_refs:
                     if not table_ref:
@@ -2929,16 +2906,6 @@ def apply_changes(project_id: str):
         print(f"🚀 Is individual table apply: {len(table_ids) > 0}")
         if len(table_ids) > 0:
             print(f"🚀 Individual table IDs: {table_ids}")
-        
-        # Create progress session immediately if session_id is provided
-        if session_id:
-            logger.info(f"🔍 Creating progress session immediately for {session_id}")
-            with progress_lock:
-                if session_id not in progress_sessions:
-                    progress_sessions[session_id] = Queue()
-                    logger.info(f"✅ Progress session {session_id} created")
-                else:
-                    logger.info(f"✅ Progress session {session_id} already exists")
         
         try:
             project = DataModelProject(**project_data)

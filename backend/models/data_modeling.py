@@ -462,6 +462,10 @@ class MetricViewJoin(BaseModel):
     join_operators: Optional[List[str]] = Field(default_factory=list, description="Operators for join conditions (=, <, >, etc.)")
     additional_conditions: Optional[str] = Field(default=None, description="Additional WHERE-like conditions for the join")
     
+    # Databricks metric view specific fields
+    using: Optional[List[str]] = Field(default=None, description="USING clause columns for equi-joins")
+    joins: Optional[List['MetricViewJoin']] = Field(default=None, description="Nested joins for snowflake schema")
+    
     # Performance and optimization hints
     broadcast_hint: bool = Field(default=False, description="Whether to use broadcast hint for small tables")
     bucket_hint: Optional[str] = Field(default=None, description="Bucket join hint if tables are bucketed")

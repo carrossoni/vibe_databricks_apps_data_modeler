@@ -1,9 +1,0 @@
-pytest==7.4.3
-pytest-cov==4.1.0
-pytest-xdist==3.5.0
-pytest-mock
-approvaltests==11.1.1
-autoflake==2.3.1
-isort==5.13.2
-pycodestyle==2.11.1
-yapf==0.40.2

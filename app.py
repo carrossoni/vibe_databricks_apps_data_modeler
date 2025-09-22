@@ -69,6 +69,8 @@ def get_databricks_client():
                     client = WorkspaceClient(host=host, token=user_token, auth_type="pat")
                     logger.info("✅ Successfully created user-authenticated client (OBO)")
                     return client
+                except Exception as e:
+                    logger.error(f"Failed to create OBO client: {e}")
                 finally:
                     # Restore environment variables
                     if original_client_id:
@@ -86,16 +88,20 @@ def get_databricks_client():
             # Use app authorization (service principal)
             logger.info("🔧 Using app authorization (service principal)")
             host = os.getenv('DATABRICKS_SERVER_HOSTNAME') or os.getenv('DATABRICKS_HOST')
-            config = Config(
-                host=host,
-                client_id=client_id,
-                client_secret=client_secret
-            )
-            return WorkspaceClient(config=config)
-        else:
-            # Fallback to default authentication
-            logger.info("🔧 Using default authentication")
-            return WorkspaceClient()
+            try:
+                config = Config(
+                    host=host,
+                    client_id=client_id,
+                    client_secret=client_secret
+                )
+                client = WorkspaceClient(config=config)
+                logger.info("✅ Successfully created service principal client")
+                return client
+            except Exception as e:
+                logger.error(f"Failed to create service principal client: {e}")
+        
+        logger.error("No valid authentication method available")
+        return None
             
     except Exception as e:
         logger.error(f"Failed to create Databricks client: {e}")

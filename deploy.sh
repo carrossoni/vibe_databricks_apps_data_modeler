@@ -108,216 +108,162 @@ fi
 echo ""
 echo "🔧 Starting bundle deployment..."
 
-# Function to create app with robust error handling
-create_app_if_needed() {
-    echo "🔍 Checking if app exists..."
+
+# Proactive state check and cleanup before deployment
+echo "🔍 Performing proactive state check and cleanup..."
+
+# Function to prepare deployment state (without deleting existing app)
+prepare_deployment_state() {
+    echo "🔍 Checking deployment state..."
     
-    # Check if app exists (with simple retry for network issues)
+    # Check if app exists in Databricks
     if databricks apps get "$APP_NAME" &> /dev/null; then
-        echo "✅ App already exists"
+        echo "✅ App exists - will deploy to existing app"
+        APP_EXISTS=true
         
-        # Check app state and wait if necessary
-        echo "🔍 Checking app state..."
+        # Check app state
         APP_INFO=$(databricks apps get "$APP_NAME" 2>/dev/null)
-        if echo "$APP_INFO" | grep -q '"state":\s*"STARTING"'; then
-            echo "⏳ App compute is in STARTING state, waiting for it to become ACTIVE..."
+        if echo "$APP_INFO" | grep -q '"compute_status".*"state":\s*"STARTING"'; then
+            echo "⏳ App compute is starting, waiting for it to stabilize..."
             
             # Wait for app to reach stable state
             wait_time=0
-            max_wait=300  # 5 minutes
+            max_wait=180  # 3 minutes
             while [ $wait_time -lt $max_wait ]; do
                 sleep 15
                 wait_time=$((wait_time + 15))
                 
                 APP_INFO=$(databricks apps get "$APP_NAME" 2>/dev/null)
-                if echo "$APP_INFO" | grep -q '"state":\s*"ACTIVE"'; then
+                if echo "$APP_INFO" | grep -q '"compute_status".*"state":\s*"ACTIVE"'; then
                     echo "✅ App compute is now ACTIVE"
                     break
-                elif echo "$APP_INFO" | grep -q '"state":\s*"STOPPED"'; then
-                    echo "✅ App compute is now STOPPED"
-                    break
-                elif echo "$APP_INFO" | grep -q '"state":\s*"ERROR"'; then
-                    echo "❌ App compute is in ERROR state, stopping it first..."
-                    databricks apps stop "$APP_NAME" 2>/dev/null || true
-                    sleep 10
+                elif echo "$APP_INFO" | grep -q '"compute_status".*"state":\s*"STOPPED"'; then
+                    echo "✅ App compute is STOPPED"
                     break
                 fi
                 
-                echo "⏳ Still waiting for compute... (${wait_time}s/${max_wait}s)"
+                echo "⏳ Still waiting for compute to stabilize... (${wait_time}s/${max_wait}s)"
             done
-            
-            if [ $wait_time -ge $max_wait ]; then
-                echo "⚠️  App compute is taking too long to start, attempting to stop it..."
-                databricks apps stop "$APP_NAME" 2>/dev/null || true
-                sleep 10
-            fi
         fi
+    else
+        echo "📱 App doesn't exist - will create new app"
+        APP_EXISTS=false
+    fi
+    
+    # Clean only local state (keep workspace state if app exists)
+    echo "🧹 Cleaning local bundle state..."
+    rm -rf .databricks/ 2>/dev/null || true
+    
+    # Only clean workspace state if app doesn't exist
+    if [ "$APP_EXISTS" = false ]; then
+        echo "🧹 Cleaning workspace bundle state for fresh deployment..."
+        USER_EMAIL=$(databricks auth describe | grep -oE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1)
+        if [ -n "$USER_EMAIL" ]; then
+            databricks workspace delete "/Workspace/Users/$USER_EMAIL/.bundle/$APP_NAME" --recursive 2>/dev/null || true
+        fi
+    else
+        echo "ℹ️  Keeping workspace state for existing app"
+    fi
+    
+    echo "✅ Deployment state prepared"
+}
+
+# Prepare deployment state
+prepare_deployment_state
+
+# Deploy the bundle to existing or new app
+echo "📦 Deploying bundle..."
+
+# Smart deployment function that handles existing and new apps
+deploy_with_prepared_state() {
+    echo "🚀 Starting deployment..."
+    
+    # Create app if it doesn't exist (APP_EXISTS is set by prepare_deployment_state)
+    if [ "$APP_EXISTS" = false ]; then
+        echo "📱 Creating new app..."
+        if databricks apps create "$APP_NAME" --description "Visual data modeling tool for Databricks Unity Catalog with ERD design, DDL generation, and direct table/view creation"; then
+            echo "✅ App created successfully"
+            sleep 10  # Give it time to initialize
+        else
+            echo "❌ Failed to create app"
+            return 1
+        fi
+    else
+        echo "✅ Using existing app"
+    fi
+    
+    # Deploy bundle to the app
+    echo "🚀 Deploying bundle..."
+    
+    # Try deployment first
+    deploy_output=$(databricks bundle deploy --target default 2>&1)
+    deploy_exit_code=$?
+    
+    if [ $deploy_exit_code -eq 0 ]; then
+        echo "✅ Bundle deployed successfully"
         return 0
     else
-        echo "📱 App does not exist, creating it first..."
-        
-        # Clean any stale state before creating
-        echo "🧹 Cleaning any stale bundle state..."
-        rm -rf .databricks/ 2>/dev/null || true
-        
-        # Create the app directly with retries
-        echo "🚀 Creating app: $APP_NAME"
-        
-        local create_attempts=0
-        local max_create_attempts=3
-        
-        while [ $create_attempts -lt $max_create_attempts ]; do
-            create_attempts=$((create_attempts + 1))
-            echo "🔄 App creation attempt $create_attempts/$max_create_attempts"
+        # Check if it's the "app already exists" error (handle potential line breaks)
+        if echo "$deploy_output" | tr '\n' ' ' | grep -q "An app with the same name already exists"; then
+            echo "🔍 Bundle deployment failed because app already exists but state is mismatched"
+            echo "🧹 This indicates a state synchronization issue - will reset and recreate cleanly..."
             
-            # Try to create the app (handle network timeouts gracefully)
-            if databricks apps create "$APP_NAME" 2>/dev/null; then
-                echo "✅ App created successfully"
-                sleep 10  # Give it time to initialize
+            # Since bundle and app state are out of sync, reset everything and start fresh
+            echo "⏸️  Stopping existing app..."
+            databricks apps stop "$APP_NAME" 2>/dev/null || true
+            sleep 5
+            
+            echo "🗑️  Deleting existing app to resolve state conflict..."
+            if databricks apps delete "$APP_NAME" 2>/dev/null; then
+                echo "✅ App deleted successfully"
+                sleep 15
                 
-                # Verify app was created
-                if databricks apps get "$APP_NAME" &> /dev/null; then
-                    echo "✅ App creation verified"
-                    return 0
-                else
-                    echo "⚠️  App creation command succeeded but app not found, retrying..."
-                fi
+                # Verify deletion
+                max_wait=60
+                wait_time=0
+                while [ $wait_time -lt $max_wait ]; do
+                    if ! databricks apps get "$APP_NAME" &> /dev/null; then
+                        echo "✅ App deletion confirmed"
+                        break
+                    fi
+                    sleep 5
+                    wait_time=$((wait_time + 5))
+                    echo "⏳ Still waiting for deletion... (${wait_time}s/${max_wait}s)"
+                done
             else
-                echo "⚠️  App creation attempt $create_attempts failed"
-                if [ $create_attempts -lt $max_create_attempts ]; then
-                    echo "🔄 Waiting 15 seconds before retry..."
-                    sleep 15
-                fi
+                echo "⚠️  Failed to delete app"
             fi
-        done
-        
-        echo "⚠️  Direct app creation failed after $max_create_attempts attempts"
-        echo "📦 Will attempt creation through bundle deployment..."
-        return 1
+            
+            # Clean all state
+            echo "🧹 Cleaning all state for fresh deployment..."
+            rm -rf .databricks/ 2>/dev/null || true
+            
+            USER_EMAIL=$(databricks auth describe | grep -oE '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}' | head -1)
+            if [ -n "$USER_EMAIL" ]; then
+                databricks workspace delete "/Workspace/Users/$USER_EMAIL/.bundle/$APP_NAME" --recursive 2>/dev/null || true
+            fi
+            
+            sleep 10
+            
+            # Try fresh deployment
+            echo "🔄 Attempting fresh deployment with clean state..."
+            if databricks bundle deploy --target default; then
+                echo "✅ Bundle deployed successfully after reset"
+                return 0
+            else
+                echo "❌ Bundle deployment failed even after complete reset"
+                return 1
+            fi
+        else
+            echo "❌ Bundle deployment failed with error:"
+            echo "$deploy_output"
+            return 1
+        fi
     fi
 }
 
-# Create app if needed
-create_app_if_needed
-
-# Deploy the bundle with automatic state cleanup
-echo "📦 Deploying bundle..."
-
-# Function to deploy with retry and state cleanup
-deploy_with_retry() {
-    local max_retries=3
-    local retry_count=0
-    
-    while [ $retry_count -lt $max_retries ]; do
-        echo "🔄 Deployment attempt $((retry_count + 1))/$max_retries"
-        
-        # Capture deployment output to check for specific errors
-        local deploy_output
-        deploy_output=$(databricks bundle deploy --target default 2>&1)
-        local exit_code=$?
-        
-        if [ $exit_code -eq 0 ]; then
-            echo "✅ Bundle deployed successfully"
-            return 0
-        else
-            echo "❌ Deployment failed with exit code: $exit_code"
-            
-            # Check if it's a stale state issue
-                if echo "$deploy_output" | grep -q "does not exist or is deleted"; then
-                    echo "🔍 Detected stale Terraform state (app was deleted)"
-                    echo "🧹 Cleaning up stale Terraform state..."
-                    
-                    # Clean up the Terraform state completely
-                    if [ -d ".databricks/bundle/default/terraform" ]; then
-                        rm -rf .databricks/bundle/default/terraform/
-                        echo "✅ Terraform state directory removed"
-                    fi
-                    
-                    # Clean up any other bundle state
-                    if [ -d ".databricks/bundle/default" ]; then
-                        rm -rf .databricks/bundle/default/
-                        echo "✅ Bundle state directory removed"
-                    fi
-                    
-                    # Try to destroy any remaining bundle resources
-                    echo "🧹 Attempting to clean bundle resources..."
-                    databricks bundle destroy --auto-approve --target default 2>/dev/null || echo "ℹ️  No bundle resources to clean"
-                    
-                    # If app doesn't exist, try to create it first
-                    echo "🔄 Attempting to create app before retry..."
-                    create_app_if_needed
-                    
-                    retry_count=$((retry_count + 1))
-                    if [ $retry_count -lt $max_retries ]; then
-                        echo "🔄 Retrying deployment with completely clean state..."
-                        sleep 3
-                    fi
-            elif echo "$deploy_output" | grep -q "failed to read app"; then
-                echo "🔍 Detected app reference issue in Terraform state"
-                echo "🧹 Performing complete state cleanup and config fix..."
-                
-                # More aggressive cleanup
-                rm -rf .databricks/bundle/ 2>/dev/null || true
-                
-                # Try to fix the issue by creating app with a temporary name first
-                if [ $retry_count -eq 0 ]; then
-                    echo "🔧 Attempting to create app with bundle deployment using clean workspace state..."
-                    
-                    # Clean workspace-level state
-                    databricks workspace delete "/Workspace/Users/$(databricks auth describe | grep -oE '[^@]+@[^@]+\.[^@]+')/.bundle" -r 2>/dev/null || true
-                fi
-                
-                retry_count=$((retry_count + 1))
-                if [ $retry_count -lt $max_retries ]; then
-                    echo "🔄 Retrying with fresh bundle state..."
-                    sleep 3
-                fi
-            elif echo "$deploy_output" | grep -q "compute is in STARTING state"; then
-                echo "🔍 Detected app is in STARTING state, waiting for it to stabilize..."
-                
-                # Wait for app to reach stable state
-                wait_time=0
-                max_wait=180  # 3 minutes
-                while [ $wait_time -lt $max_wait ]; do
-                    sleep 15
-                    wait_time=$((wait_time + 15))
-                    
-                    APP_INFO=$(databricks apps get "$APP_NAME" 2>/dev/null)
-                    if echo "$APP_INFO" | grep -q '"status":\s*"ACTIVE"'; then
-                        echo "✅ App is now ACTIVE, retrying deployment..."
-                        break
-                    elif echo "$APP_INFO" | grep -q '"status":\s*"STOPPED"'; then
-                        echo "✅ App is now STOPPED, retrying deployment..."
-                        break
-                    elif echo "$APP_INFO" | grep -q '"status":\s*"ERROR"'; then
-                        echo "❌ App is in ERROR state, stopping it..."
-                        databricks apps stop "$APP_NAME" 2>/dev/null || true
-                        sleep 10
-                        break
-                    fi
-                    
-                    echo "⏳ Still waiting for app to stabilize... (${wait_time}s/${max_wait}s)"
-                done
-                
-                retry_count=$((retry_count + 1))
-                if [ $retry_count -lt $max_retries ]; then
-                    echo "🔄 Retrying deployment with stabilized app..."
-                    sleep 3
-                fi
-            else
-                echo "❌ Deployment failed with different error:"
-                echo "$deploy_output"
-                return $exit_code
-            fi
-        fi
-    done
-    
-    echo "❌ Deployment failed after $max_retries attempts"
-    return 1
-}
-
-# Execute deployment with retry logic
-if ! deploy_with_retry; then
+# Execute deployment with prepared state
+if ! deploy_with_prepared_state; then
     echo ""
     echo "❌ Bundle deployment failed after all retries"
     echo ""
@@ -355,6 +301,61 @@ echo "============================"
 databricks bundle status
 
 echo ""
+echo "⏳ Waiting for bundle deployment to complete before source deployment..."
+echo "======================================================================="
+
+# Wait for app to be ready for source deployment
+wait_for_app_ready() {
+    echo "🔍 Checking if app is ready for source deployment..."
+    
+    # Wait a bit for bundle deployment to complete
+    echo "⏳ Waiting 15 seconds for bundle deployment to stabilize..."
+    sleep 15
+    
+    # Check app status and wait for it to be ready
+    local max_wait=60  # 1 minute - reduced from 5 minutes
+    local wait_time=0
+    
+    while [ $wait_time -lt $max_wait ]; do
+        if databricks apps get "$APP_NAME" &> /dev/null; then
+            APP_INFO=$(databricks apps get "$APP_NAME" 2>/dev/null)
+            
+            # Check if app is in a deployable state
+            if echo "$APP_INFO" | grep -A 10 '"compute_status"' | grep -q '"state":"ACTIVE"'; then
+                echo "✅ App compute is ACTIVE, ready for source deployment"
+                return 0
+            elif echo "$APP_INFO" | grep -A 10 '"compute_status"' | grep -q '"state":"STOPPED"'; then
+                echo "🔍 App compute is STOPPED, starting it for source deployment..."
+                if databricks apps start "$APP_NAME"; then
+                    echo "✅ App compute started successfully"
+                    # Wait a bit for it to become active
+                    echo "⏳ Waiting for app compute to become active..."
+                    sleep 30
+                    return 0
+                else
+                    echo "❌ Failed to start app compute"
+                    return 1
+                fi
+            else
+                echo "⏳ App is still initializing... waiting (${wait_time}s/${max_wait}s)"
+                sleep 15
+                wait_time=$((wait_time + 15))
+            fi
+        else
+            echo "⚠️  App not found, waiting for it to appear... (${wait_time}s/${max_wait}s)"
+            sleep 15
+            wait_time=$((wait_time + 15))
+        fi
+    done
+    
+    echo "⚠️  App didn't reach ready state within ${max_wait}s, proceeding with source deployment..."
+    return 0
+}
+
+# Wait for app to be ready
+wait_for_app_ready
+
+echo ""
 echo "📦 Deploying source code to app..."
 echo "=================================="
 
@@ -371,25 +372,53 @@ if [ -z "$USER_EMAIL" ]; then
 fi
 
 BUNDLE_FILES_PATH="/Workspace/Users/$USER_EMAIL/.bundle/$APP_NAME/default/files"
-echo "🔍 Source code path: $BUNDLE_FILES_PATH"
+echo "🔍 Bundle source path: $BUNDLE_FILES_PATH"
+echo "🔍 Using current directory as source: $(pwd)"
 
-# Deploy with retry logic
+# Deploy with enhanced retry logic for "active deployment" errors
 deploy_source_attempts=0
-max_source_attempts=3
+max_source_attempts=5  # Increased attempts for deployment timing issues
 
 while [ $deploy_source_attempts -lt $max_source_attempts ]; do
     deploy_source_attempts=$((deploy_source_attempts + 1))
     echo "🔄 Source deployment attempt $deploy_source_attempts/$max_source_attempts"
     
-    if databricks apps deploy "$APP_NAME" --source-code-path "$BUNDLE_FILES_PATH"; then
+    # Capture deployment output to check for specific errors
+    # Try bundle path first, fallback to current directory
+    deploy_output=$(databricks apps deploy "$APP_NAME" --source-code-path "$BUNDLE_FILES_PATH" 2>&1)
+    deploy_exit_code=$?
+    
+    # Show deployment output for debugging
+    if [ $deploy_exit_code -ne 0 ]; then
+        echo "⚠️  Source deployment failed, error output:"
+        echo "$deploy_output"
+    fi
+    
+    if [ $deploy_exit_code -eq 0 ]; then
         echo "✅ Source code deployed successfully!"
         break
     else
         echo "⚠️  Source deployment attempt $deploy_source_attempts failed"
-        if [ $deploy_source_attempts -lt $max_source_attempts ]; then
-            echo "🔄 Waiting 10 seconds before retry..."
-            sleep 10
+        
+        # Check if it's an "active deployment in progress" error
+        if echo "$deploy_output" | grep -q "active deployment in progress"; then
+            echo "🔍 Detected 'active deployment in progress' - waiting for deployment to complete..."
+            if [ $deploy_source_attempts -lt $max_source_attempts ]; then
+                # Wait longer for active deployments
+                wait_time=60
+                echo "⏳ Waiting ${wait_time} seconds for active deployment to complete..."
+                sleep $wait_time
+            fi
         else
+            echo "❌ Different error occurred:"
+            echo "$deploy_output"
+            if [ $deploy_source_attempts -lt $max_source_attempts ]; then
+                echo "🔄 Waiting 15 seconds before retry..."
+                sleep 15
+            fi
+        fi
+        
+        if [ $deploy_source_attempts -eq $max_source_attempts ]; then
             echo "❌ Source deployment failed after $max_source_attempts attempts"
             echo "🔧 Manual deployment command:"
             echo "   databricks apps deploy $APP_NAME --source-code-path \"$BUNDLE_FILES_PATH\""

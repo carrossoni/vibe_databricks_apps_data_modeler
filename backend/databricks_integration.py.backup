@@ -18,12 +18,6 @@ from models.data_modeling import (
     MetricViewMeasure, MetricViewJoin, MetricSourceRelationship, TraditionalView
 )
 
-# Configure logging with proper levels
-import os
-log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-if hasattr(logging, log_level):
-    logging.getLogger().setLevel(getattr(logging, log_level))
-
 
 logger = logging.getLogger(__name__)
 
@@ -1313,16 +1307,6 @@ class DatabricksUnityService:
             for col_name in columns_to_drop:
                 alter_statements.append(f"ALTER TABLE {full_name} DROP COLUMN {col_name};")
             
-            # 4.5. Check table comment changes
-            current_table_comment = current_table_info.comment or ""
-            desired_table_comment = data_table.comment or ""
-            if current_table_comment != desired_table_comment:
-                logger.info(f"💬 Updating table comment for: {full_name}")
-                print(f"💬 TABLE COMMENT CHANGE DETECTED:")
-                print(f"   Current: '{current_table_comment}'")
-                print(f"   Desired: '{desired_table_comment}'")
-                alter_statements.append(f"ALTER TABLE {full_name} SET TBLPROPERTIES ('comment' = '{desired_table_comment}');")
-            
             # 5. Handle constraints (PK, FK)
             constraint_statements = self._generate_constraint_alter_statements(data_table, catalog_name, schema_name, current_table_info, all_tables)
             alter_statements.extend(constraint_statements)
@@ -2043,7 +2027,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
     def _get_column_tags_from_information_schema(self, catalog_name: str, schema_name: str, table_name: str) -> dict:
         """Get column tags using Information Schema SQL query"""
         try:
-            logger.debug(f"Querying INFORMATION_SCHEMA.COLUMN_TAGS for {catalog_name}.{schema_name}.{table_name}")
+            print(f"🔍 QUERYING INFORMATION_SCHEMA.COLUMN_TAGS for {catalog_name}.{schema_name}.{table_name}")
             
             # SQL query to get column tags from Information Schema
             sql_query = f"""
@@ -2057,7 +2041,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
               AND table_name = '{table_name}'
             """
             
-            logger.debug(f"SQL Query: {sql_query}")
+            print(f"🔍 SQL Query: {sql_query}")
             
             # Execute the query using Databricks SQL execution API
             warehouse_id = self._get_warehouse_id()
@@ -2065,7 +2049,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                 print(f"⚠️ No warehouse available for tag query")
                 return {}
             
-            logger.debug(f"Using warehouse ID: {warehouse_id}")
+            print(f"🔍 Using warehouse ID: {warehouse_id}")
             
             # Execute SQL statement
             statement_response = self.client.statement_execution.execute_statement(
@@ -2074,13 +2058,13 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                 wait_timeout="30s"
             )
             
-            logger.debug(f"Tag query statement ID: {statement_response.statement_id}")
-            logger.debug(f"Tag query status: {statement_response.status.state}")
+            print(f"🔍 Tag query statement ID: {statement_response.statement_id}")
+            print(f"🔍 Tag query status: {statement_response.status.state}")
             
             # Parse results
             current_tags = {}
             if statement_response.result and statement_response.result.data_array:
-                logger.debug(f"Found {len(statement_response.result.data_array)} tag rows")
+                print(f"🔍 Found {len(statement_response.result.data_array)} tag rows")
                 for row in statement_response.result.data_array:
                     if len(row) >= 3:
                         column_name = row[0]
@@ -2093,12 +2077,12 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                         
                         print(f"   📋 Found tag: {column_name}.{tag_name} = '{tag_value}'")
             else:
-                logger.debug("No tag data returned from query")
+                print(f"🔍 No tag data returned from query")
                 if statement_response.result:
-                    logger.debug("Result object exists but no data_array")
-                    logger.debug(f"Result: {statement_response.result}")
+                    print(f"🔍 Result object exists but no data_array")
+                    print(f"🔍 Result: {statement_response.result}")
             
-            logger.debug(f"Final current tags: {current_tags}")
+            print(f"🔍 FINAL CURRENT TAGS: {current_tags}")
             return current_tags
             
         except Exception as e:
@@ -2110,7 +2094,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
         """Get table-level tags using Information Schema SQL query"""
         try:
             full_table_name = f"{catalog_name}.{schema_name}.{table_name}"
-            # print(f"🔍 QUERYING INFORMATION_SCHEMA.TABLE_TAGS for {full_table_name}")
+            print(f"🔍 QUERYING INFORMATION_SCHEMA.TABLE_TAGS for {full_table_name}")
             
             # SQL query to get table tags from Information Schema
             sql_query = f"""
@@ -2123,7 +2107,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
               AND table_name = '{table_name}'
             """
             
-            logger.debug(f"SQL Query: {sql_query}")
+            print(f"🔍 SQL Query: {sql_query}")
             
             # Execute the query using Databricks SQL execution API
             warehouse_id = self._get_warehouse_id()
@@ -2131,7 +2115,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                 print(f"⚠️ No warehouse available for table tag query")
                 return {}
             
-            logger.debug(f"Using warehouse ID: {warehouse_id}")
+            print(f"🔍 Using warehouse ID: {warehouse_id}")
             
             # Execute SQL statement
             statement_response = self.client.statement_execution.execute_statement(
@@ -2140,13 +2124,13 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                 wait_timeout="30s"
             )
             
-            # print(f"🔍 Table tag query statement ID: {statement_response.statement_id}")
-            # print(f"🔍 Table tag query status: {statement_response.status.state}")
+            print(f"🔍 Table tag query statement ID: {statement_response.statement_id}")
+            print(f"🔍 Table tag query status: {statement_response.status.state}")
             
             # Parse results
             table_tags = {}
             if statement_response.result and statement_response.result.data_array:
-                # print(f"🔍 Found {len(statement_response.result.data_array)} table tag rows")
+                print(f"🔍 Found {len(statement_response.result.data_array)} table tag rows")
                 for row in statement_response.result.data_array:
                     if len(row) >= 2:
                         tag_name = row[0]
@@ -2160,7 +2144,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                     print(f"🔍 Result object exists but no data_array")
                     print(f"🔍 Result: {statement_response.result}")
             
-            # print(f"🔍 FINAL TABLE TAGS: {table_tags}")
+            print(f"🔍 FINAL TABLE TAGS: {table_tags}")
             return table_tags
             
         except Exception as e:
@@ -2226,16 +2210,14 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                                 tag_value = assignment.get('tag_value', '')
                                 if tag_key:
                                     column_tags[tag_key] = tag_value
-                                    # Logging tag discovery (commented out for cleaner output)
+                                    print(f"   📋 Found tag: {column.name}.{tag_key} = '{tag_value}'")
                             
                             if column_tags:
                                 current_tags[column.name] = column_tags
                         else:
-                            # No tags found for column
-                            pass
+                            print(f"   📋 No tags found for column {column.name}")
                     elif response.status_code == 404:
-                        # No tags found for column (404)
-                        pass
+                        print(f"   📋 No tags found for column {column.name} (404 - not found)")
                     else:
                         print(f"⚠️ API error for column {column.name}: {response.status_code}")
                         print(f"⚠️ Response: {response.text}")
@@ -2245,7 +2227,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                     # Continue with other columns even if one fails
                     continue
             
-            logger.debug(f"Final current tags: {current_tags}")
+            print(f"🔍 FINAL CURRENT TAGS: {current_tags}")
             return current_tags
             
         except Exception as e:
@@ -2296,16 +2278,15 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                             tag_value = assignment.get('tag_value', '')
                             if tag_key:
                                 table_tags[tag_key] = tag_value
-                                # Logging table tag discovery (commented out for cleaner output)
+                                print(f"   📋 Found table tag: {tag_key} = '{tag_value}'")
                     else:
-                        # No tags found for table
-                        pass
+                        print(f"   📋 No tags found for table {full_table_name}")
                     
-                    # print(f"🔍 FINAL TABLE TAGS: {table_tags}")
+                    print(f"🔍 FINAL TABLE TAGS: {table_tags}")
                     return table_tags
                     
                 elif response.status_code == 404:
-                    # No tags found for table (404)
+                    print(f"   📋 No tags found for table {full_table_name} (404 - not found)")
                     return {}
                 else:
                     print(f"⚠️ Table API error: {response.status_code}")
@@ -3035,19 +3016,9 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
             x = max(50, x)
             y = max(50, y)
         
-        # Auto-size table based on field count and field name lengths
+        # Auto-size table based on field count
         field_count = len(fields)
         calculated_height = max(180, 120 + field_count * 25)  # Base height + field height
-        
-        # Calculate width based on longest field name + data type
-        max_field_width = 0
-        for field in fields:
-            # Estimate character width: field name + data type + some padding
-            field_text_length = len(field.name) + len(str(field.data_type)) + 10
-            max_field_width = max(max_field_width, field_text_length)
-        
-        # Convert character width to pixels (approximate 8px per character)
-        calculated_width = max(280, min(500, 150 + max_field_width * 8))
         
         return DataTable(
             name=table_info.name,
@@ -3061,7 +3032,6 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
             fields=fields,
             position_x=x,
             position_y=y,
-            width=calculated_width,   # Auto-sized based on field names
             height=calculated_height,  # Auto-sized based on field count
             tags=table_tags  # Include imported table tags
         )
@@ -3088,7 +3058,6 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                         referenced_tables.append(full_table_name)
                     
                     logger.info(f"🔍 FK references table: {fk_constraint.parent_table} -> resolved to: {referenced_tables[-1] if referenced_tables else 'none'}")
-                    logger.info(f"🔍 DEBUG: parent_table='{fk_constraint.parent_table}', parts={parts}, len={len(parts)}, using_catalog={catalog_name}, using_schema={schema_name}")
         
         return list(set(referenced_tables))  # Remove duplicates
 
@@ -3534,13 +3503,6 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                 # Get view definition using DESCRIBE TABLE EXTENDED or SHOW CREATE VIEW
                 view_definition = self._get_view_definition(catalog_name, schema_name, view_name)
                 
-                # Debug: Show the actual view definition
-                logger.info(f"🔍 DEBUG: Retrieved view definition for {view_name}:")
-                logger.info(f"🔍 DEBUG: View definition length: {len(view_definition) if view_definition else 0}")
-                if view_definition:
-                    logger.info(f"🔍 DEBUG: View definition (first 500 chars): {view_definition[:500]}...")
-                    logger.info(f"🔍 DEBUG: View definition (last 200 chars): ...{view_definition[-200:]}")
-                
                 if not view_definition:
                     logger.warning(f"⚠️ Could not get definition for view {view_name}")
                     continue
@@ -3548,13 +3510,6 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                 # Detect view type
                 view_type = self._detect_view_type(view_definition)
                 logger.info(f"🔍 Detected view type for {view_name}: {view_type}")
-                
-                # Debug: Show view definition preview for metric view detection
-                logger.info(f"🔍 DEBUG: View definition preview for {view_name}: {view_definition[:300]}...")
-                if "AS $$" in view_definition:
-                    logger.info(f"🔍 DEBUG: Found 'AS $$' in view definition - should be metric view")
-                else:
-                    logger.info(f"🔍 DEBUG: No 'AS $$' found in view definition - will be traditional view")
                 
                 if view_type == "metric":
                     # Parse as metric view
@@ -3724,7 +3679,6 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
     
     def _parse_metric_view(self, view_name: str, view_definition: str, catalog_name: str, schema_name: str, position_index: int = 0) -> Optional[MetricView]:
         """Parse a metric view definition from YAML structure"""
-        logger.info(f"🔧 _parse_metric_view called for {view_name}")
         try:
             import yaml
             import re
@@ -3758,12 +3712,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                 return None
             
             # Extract basic information
-            version_value = yaml_data.get('version', '1.0')
-            # Handle version as string or float
-            if isinstance(version_value, (int, float)):
-                version = str(version_value)
-            else:
-                version = version_value
+            version = yaml_data.get('version', '0.1')
             source = yaml_data.get('source', '')
             
             # Parse dimensions
@@ -3787,129 +3736,19 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
             
             # Parse joins
             joins = []
-            logger.info(f"🔧 Parsing {len(yaml_data.get('joins', []))} joins for {view_name}")
             for join_data in yaml_data.get('joins', []):
-                # Debug: Show raw join data from YAML
-                logger.info(f"🔍 DEBUG: Raw join data from YAML: {join_data}")
-                
                 # Databricks YAML uses 'joined_table' field for the table reference
                 joined_table = join_data.get('joined_table', join_data.get('table', ''))
                 
-                # Extract join name - use 'source' field if 'name' is missing
-                join_name = join_data.get('name', join_data.get('alias', ''))
-                if not join_name and 'source' in join_data:
-                    # Extract table name from source (e.g., "carrossoni.corp_vendas.dim_produto" -> "dim_produto")
-                    join_name = join_data['source'].split('.')[-1]
-                
-                logger.info(f"🔍 DEBUG: Extracted join_name: '{join_name}' from join_data keys: {list(join_data.keys())}")
-                
-                # Parse join condition into structured components
-                left_columns = []
-                right_columns = []
-                join_operators = []
-                # Handle YAML quirk where 'on:' gets parsed as boolean True
-                sql_on = join_data.get('sql_on', join_data.get('on', join_data.get(True, '')))
-                
-                # Debug: Show raw join data from YAML
-                logger.info(f"🔍 DEBUG: Raw join data from YAML: {join_data}")
-                logger.info(f"🔍 DEBUG: Join data type: {type(join_data)}")
-                logger.info(f"🔍 DEBUG: Join data keys: {list(join_data.keys()) if isinstance(join_data, dict) else 'Not a dict'}")
-                
-                using_clause = join_data.get('using', None)
-                
-                logger.info(f"🔍 DEBUG: Extracted sql_on: '{sql_on}' (type: {type(sql_on)})")
-                logger.info(f"🔍 DEBUG: Extracted using: '{using_clause}' (type: {type(using_clause)})")
-                logger.info(f"🔍 DEBUG: Raw 'on' field: '{join_data.get('on')}' (type: {type(join_data.get('on'))})")
-                logger.info(f"🔍 DEBUG: Raw 'sql_on' field: '{join_data.get('sql_on')}' (type: {type(join_data.get('sql_on'))})")
-                
-                # Try to parse simple join conditions like "source.id = customer.id"
-                if sql_on and not using_clause:
-                    logger.info(f"🔧 About to parse join condition: '{sql_on}' (type: {type(sql_on)})")
-                    parsed_conditions = self._parse_join_condition(sql_on)
-                    logger.info(f"🔧 Parsing join condition: '{sql_on}' -> {parsed_conditions}")
-                    if parsed_conditions:
-                        left_columns = [cond['left'] for cond in parsed_conditions]
-                        right_columns = [cond['right'] for cond in parsed_conditions]
-                        join_operators = [cond['operator'] for cond in parsed_conditions]
-                        logger.info(f"🔧 Parsed arrays: left={left_columns}, right={right_columns}, ops={join_operators}")
-                    else:
-                        logger.warning(f"⚠️ Failed to parse join condition: '{sql_on}'")
-                elif using_clause:
-                    logger.info(f"🔧 Found USING clause, skipping ON condition parsing: {using_clause}")
-                else:
-                    logger.warning(f"⚠️ No sql_on or using clause found in join data")
-                
-                # Parse nested joins recursively using helper function
-                def parse_joins_recursive(joins_data, parent_name="", depth=1):
-                    """Recursively parse joins at any depth"""
-                    parsed_joins = []
-                    if not joins_data or not isinstance(joins_data, list):
-                        return parsed_joins
-                    
-                    logger.info(f"🔧 Parsing {len(joins_data)} joins at depth {depth} for {parent_name}")
-                    for join_item in joins_data:
-                        join_name = join_item.get('name', join_item.get('alias', ''))
-                        if not join_name and 'source' in join_item:
-                            join_name = join_item['source'].split('.')[-1]
-                        
-                        joined_table = join_item.get('joined_table', join_item.get('table', ''))
-                        if not joined_table and 'source' in join_item:
-                            joined_table = join_item['source']
-                        
-                        # Parse join condition
-                        left_columns = []
-                        right_columns = []
-                        join_operators = []
-                        # Handle YAML quirk where 'on:' gets parsed as boolean True
-                        sql_on = join_item.get('sql_on', join_item.get('on', join_item.get(True, '')))
-                        
-                        if sql_on and not join_item.get('using'):
-                            parsed_conditions = self._parse_join_condition(sql_on)
-                            if parsed_conditions:
-                                left_columns = [cond['left'] for cond in parsed_conditions]
-                                right_columns = [cond['right'] for cond in parsed_conditions]
-                                join_operators = [cond['operator'] for cond in parsed_conditions]
-                        
-                        # Create join object
-                        join_obj = MetricViewJoin(
-                            name=join_name,
-                            sql_on=sql_on,
-                            join_type=join_item.get('type', 'LEFT').upper(),
-                            joined_table_name=joined_table,
-                            using=join_item.get('using', None),
-                            left_columns=left_columns,
-                            right_columns=right_columns,
-                            join_operators=join_operators
-                        )
-                        
-                        # Recursively parse deeper joins
-                        if 'joins' in join_item:
-                            join_obj.joins = parse_joins_recursive(join_item['joins'], join_name, depth + 1)
-                        
-                        parsed_joins.append(join_obj)
-                    
-                    return parsed_joins
-                
-                nested_joins = []
-                if 'joins' in join_data and isinstance(join_data['joins'], list):
-                    nested_joins = parse_joins_recursive(join_data['joins'], join_name, 2)
-                
-                # Create the main join object
                 join = MetricViewJoin(
-                    name=join_name or 'unknown_join',  # Ensure we always have a name
-                    sql_on=sql_on,
+                    name=join_data.get('name', join_data.get('alias', '')),
+                    sql_on=join_data.get('sql_on', join_data.get('on', '')),
                     join_type=join_data.get('join_type', join_data.get('type', 'LEFT')),
-                    joined_table_name=joined_table or join_data.get('source', ''),  # Use 'source' as fallback
-                    description=join_data.get('description', None),
-                    using=join_data.get('using', None),
-                    left_columns=left_columns,
-                    right_columns=right_columns,
-                    join_operators=join_operators,
-                    joins=nested_joins if nested_joins else None
+                    joined_table_name=joined_table,
+                    description=join_data.get('description', None)
                 )
-                logger.info(f"🔧 Created join object: name={join.name}, left_columns={join.left_columns}, right_columns={join.right_columns}")
                 joins.append(join)
-                logger.info(f"🔗 Parsed join: {join.name} -> {join.joined_table_name} ({join.join_type})")
+                logger.info(f"🔗 Parsed join: {join.name} -> {joined_table} ({join.join_type})")
             
             # Smart positioning - use spiral pattern with different base position for metric views
             base_x, base_y = 400, 100  # Metric views start at different position
@@ -3943,17 +3782,15 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
             calculated_height = max(220, 150 + content_count * 20)
             
             # Create MetricView object
-            # Note: source_table_id will be the full table reference (e.g., "carrossoni.corp_vendas.fact_vendas")
-            # The apply logic will handle resolving this to the correct catalog/schema
             metric_view = MetricView(
                 name=view_name,
                 version=version,
-                source_table_id=source,  # Full table reference for proper catalog/schema resolution
+                source_table_id=source,  # This will be the table name, not ID
                 dimensions=dimensions,
                 measures=measures,
                 joins=joins,
-                catalog_name=catalog_name,  # Import catalog (may be different from source table)
-                schema_name=schema_name,    # Import schema (may be different from source table)
+                catalog_name=catalog_name,
+                schema_name=schema_name,
                 position_x=x,
                 position_y=y,
                 height=calculated_height
@@ -4060,9 +3897,9 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                                                                i < len(join.join_operators)) else '='
                             
                             if left_col and right_col:
-                                # Use proper aliases according to Databricks metric view spec
-                                left_alias = 'source'  # Always use 'source' for the main table
-                                right_alias = join.name  # Use join name (not table name) for joined table
+                                # Use table aliases for clarity
+                                left_alias = 'base'
+                                right_alias = join.join_alias if hasattr(join, 'join_alias') and join.join_alias else join.name
                                 conditions.append(f"{left_alias}.{left_col} {operator} {right_alias}.{right_col}")
                         
                         if conditions:
@@ -4109,18 +3946,8 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                         effective_schema = metric_view.schema_name or source_table.schema_name
                         join_data['source'] = f"{effective_catalog}.{effective_schema}.{join.name}"
                     
-                    # Add join condition - either 'on' or 'using' clause
-                    # Check for USING clause first
-                    logger.info(f"🔍 DEBUG: Join '{join.name}' attributes: {[attr for attr in dir(join) if not attr.startswith('_')]}")
-                    logger.info(f"🔍 DEBUG: Join '{join.name}' hasattr using: {hasattr(join, 'using')}")
-                    if hasattr(join, 'using'):
-                        logger.info(f"🔍 DEBUG: Join '{join.name}' using value: {getattr(join, 'using', 'NOT_FOUND')}")
-                    
-                    if hasattr(join, 'using') and join.using and len(join.using) > 0:
-                        # Use USING clause for equi-joins
-                        join_data['using'] = join.using
-                        logger.info(f"🔧 Added USING clause: {join.using}")
-                    elif sql_on_condition:
+                    # Add the ON condition (use 'on' as the field name for Databricks metric views)
+                    if sql_on_condition:
                         logger.info(f"🔍 DEBUG: Original join condition: {sql_on_condition}")
                         
                         # Replace table aliases to use Databricks format: 'source' for main table, table name for joined table
@@ -4136,29 +3963,14 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                         
                         # Also try common fact table patterns
                         databricks_condition = databricks_condition.replace('fact_vendas.', 'source.')
-                        
-                        # Fix any catalog.source.column patterns to just source.column
-                        import re
-                        databricks_condition = re.sub(r'\b\w+\.source\.', 'source.', databricks_condition)
-                        logger.info(f"🔍 DEBUG: After catalog.source fix: {databricks_condition}")
-                        
-                        # Remove catalog/schema prefixes from joined table references (e.g., carrossoni.dim_produto.produto_id -> dim_produto.produto_id)
-                        # Pattern: catalog.schema.table.column -> table.column OR catalog.table.column -> table.column
-                        databricks_condition = re.sub(r'\b\w+\.\w+\.(\w+\.\w+)', r'\1', databricks_condition)  # 4-part -> 2-part
-                        databricks_condition = re.sub(r'\b\w+\.(\w+\.\w+)', r'\1', databricks_condition)  # 3-part -> 2-part
-                        logger.info(f"🔍 DEBUG: After removing catalog/schema from joined tables: {databricks_condition}")
-                        
-                        # Also remove any remaining fact_ patterns
                         databricks_condition = databricks_condition.replace('fact_', 'source.')
                         logger.info(f"🔍 DEBUG: After fact table replacements: {databricks_condition}")
                         
-                        # Don't quote the join condition in YAML - Databricks handles quoting internally
                         join_data['on'] = databricks_condition
                         logger.info(f"🔧 Generated join condition: {databricks_condition}")
                     else:
-                        # Only add placeholder ON condition if there's no USING clause
-                        logger.warning(f"⚠️ No SQL ON condition or USING clause found for join '{join.name}' - skipping join condition")
-                        # Don't add any join condition - let Databricks handle it or show an error
+                        logger.warning(f"⚠️ No SQL ON condition found for join '{join.name}' - using placeholder")
+                        join_data['on'] = f"source.id = {join.name}.id  -- TODO: Configure join condition"
                     
                     # Add join type if not default (Databricks uses lowercase)
                     if hasattr(join, 'join_type') and join.join_type and join.join_type != 'LEFT':
@@ -4188,28 +4000,21 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                     else:
                         expr = measure.expr
                     
-                    # Fix measure names and MEASURE() function calls for Databricks compatibility
-                    measure_name = measure.name
-                    
-                    # Remove spaces from measure names for Databricks compatibility
-                    if ' ' in measure_name:
-                        clean_measure_name = measure_name.replace(' ', '')
-                        logger.info(f"🔧 Cleaned measure name: '{measure_name}' -> '{clean_measure_name}'")
-                        measure_name = clean_measure_name
-                    
-                    # Fix MEASURE() function calls to use clean measure names (no quotes needed)
+                    # Fix MEASURE() function calls to properly quote measure names with spaces
                     if expr and 'MEASURE(' in expr:
                         import re
-                        # Find all MEASURE(name) patterns and clean the names
-                        def clean_measure_reference(match):
-                            referenced_name = match.group(1).strip('"')  # Remove quotes if present
-                            clean_referenced_name = referenced_name.replace(' ', '')  # Remove spaces
-                            return f'MEASURE({clean_referenced_name})'
+                        # Find all MEASURE(name) patterns and quote names with spaces
+                        def quote_measure_name(match):
+                            measure_name = match.group(1)
+                            # If the measure name contains spaces and isn't already quoted, quote it
+                            if ' ' in measure_name and not (measure_name.startswith('"') and measure_name.endswith('"')):
+                                return f'MEASURE("{measure_name}")'
+                            return match.group(0)
                         
-                        expr = re.sub(r'MEASURE\(([^)]+)\)', clean_measure_reference, expr)
+                        expr = re.sub(r'MEASURE\(([^)]+)\)', quote_measure_name, expr)
                         logger.info(f"🔧 Fixed measure expression: {expr}")
                     
-                    measure_data = {'name': measure_name, 'expr': expr}
+                    measure_data = {'name': measure.name, 'expr': expr}
                     # Note: description is not supported by Databricks metric views
                     
                     # Window measure metadata is not supported in Databricks YAML
@@ -4220,7 +4025,6 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
             yaml_str = yaml.dump(yaml_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
             
             logger.info(f"✅ Generated YAML for metric view: {metric_view.name}")
-            logger.info(f"🔍 DEBUG: Generated YAML content:\n{yaml_str}")
             return yaml_str
             
         except Exception as e:
@@ -4273,116 +4077,18 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                     
                     # Also try common fact table patterns
                     join_condition = join_condition.replace('fact_vendas.', 'source.')
-                    
-                    # Fix any catalog.source.column patterns to just source.column
-                    import re
-                    join_condition = re.sub(r'\b\w+\.source\.', 'source.', join_condition)
-                    logger.info(f"🔍 DEBUG (reference method): After catalog.source fix: {join_condition}")
-                    
-                    # Remove catalog/schema prefixes from joined table references (e.g., carrossoni.dim_produto.produto_id -> dim_produto.produto_id)
-                    # Pattern: catalog.schema.table.column -> table.column OR catalog.table.column -> table.column
-                    join_condition = re.sub(r'\b\w+\.\w+\.(\w+\.\w+)', r'\1', join_condition)  # 4-part -> 2-part
-                    join_condition = re.sub(r'\b\w+\.(\w+\.\w+)', r'\1', join_condition)  # 3-part -> 2-part
-                    logger.info(f"🔍 DEBUG (reference method): After removing catalog/schema from joined tables: {join_condition}")
-                    
-                    # Also remove any remaining fact_ patterns
                     join_condition = join_condition.replace('fact_', 'source.')
                     logger.info(f"🔍 DEBUG (reference method): After fact table replacements: {join_condition}")
                     
-                    # Don't quote the join condition in YAML - Databricks handles quoting internally
                     join_data = {
                         'name': join.name,
-                        'source': joined_table
+                        'source': joined_table,
+                        'on': join_condition
                     }
-                    
-                    # Add join condition - either 'on' or 'using' clause
-                    # Check for USING clause first
-                    logger.info(f"🔍 DEBUG (reference method): Join '{join.name}' attributes: {[attr for attr in dir(join) if not attr.startswith('_')]}")
-                    logger.info(f"🔍 DEBUG (reference method): Join '{join.name}' hasattr using: {hasattr(join, 'using')}")
-                    if hasattr(join, 'using'):
-                        logger.info(f"🔍 DEBUG (reference method): Join '{join.name}' using value: {getattr(join, 'using', 'NOT_FOUND')}")
-                    
-                    if hasattr(join, 'using') and join.using and len(join.using) > 0:
-                        # Use USING clause for equi-joins
-                        join_data['using'] = join.using
-                        logger.info(f"🔧 Added USING clause (reference method): {join.using}")
-                    elif join_condition:
-                        join_data['on'] = join_condition
-                        logger.info(f"🔧 Generated join condition (reference method): {join_condition}")
-                    else:
-                        logger.warning(f"⚠️ No SQL ON condition or USING clause found for join '{join.name}' (reference method) - skipping join condition")
                     
                     # Add join type if not default (Databricks uses lowercase)
                     if hasattr(join, 'join_type') and join.join_type and join.join_type != 'LEFT':
                         join_data['type'] = join.join_type.lower()
-                    
-                    # Add nested joins if present (for snowflake schema) - RECURSIVE FUNCTION
-                    def process_nested_joins_recursive(joins_list, depth=0):
-                        """Recursively process nested joins at any depth"""
-                        nested_joins_data = []
-                        logger.info(f"🔧 Processing {len(joins_list)} nested joins at depth {depth} (reference method)")
-                        
-                        for nested_join in joins_list:
-                            nested_joined_table = nested_join.joined_table_name or f"{source_table_ref.rsplit('.', 1)[0]}.{nested_join.name}"
-                            
-                            # Fix duplicate catalog/schema for nested joins too
-                            nested_parts = nested_joined_table.split('.')
-                            if len(nested_parts) > 3:
-                                nested_joined_table = '.'.join(nested_parts[-3:])
-                                logger.info(f"🔧 Fixed duplicate catalog/schema in nested join (reference method): {nested_join.joined_table_name} -> {nested_joined_table}")
-                            
-                            nested_join_data = {
-                                'name': nested_join.name,
-                                'source': nested_joined_table
-                            }
-                            
-                            # Handle nested join condition - either 'on' or 'using' clause
-                            logger.info(f"🔍 DEBUG (reference method): Nested join '{nested_join.name}' at depth {depth} attributes: {[attr for attr in dir(nested_join) if not attr.startswith('_')]}")
-                            logger.info(f"🔍 DEBUG (reference method): Nested join '{nested_join.name}' hasattr using: {hasattr(nested_join, 'using')}")
-                            if hasattr(nested_join, 'using'):
-                                logger.info(f"🔍 DEBUG (reference method): Nested join '{nested_join.name}' using value: {getattr(nested_join, 'using', 'NOT_FOUND')}")
-                            
-                            if hasattr(nested_join, 'using') and nested_join.using and len(nested_join.using) > 0:
-                                # Use USING clause for equi-joins
-                                nested_join_data['using'] = nested_join.using
-                                logger.info(f"🔧 Added USING clause to nested join at depth {depth} (reference method): {nested_join.using}")
-                            elif nested_join.sql_on:
-                                # Process nested join condition similar to parent join
-                                nested_join_condition = nested_join.sql_on
-                                nested_join_condition = nested_join_condition.replace('base.', 'source.')
-                                
-                                # Replace source table references
-                                if hasattr(metric_view, 'source_table') and metric_view.source_table:
-                                    source_name = metric_view.source_table.split('.')[-1]
-                                    nested_join_condition = nested_join_condition.replace(f'{source_name}.', 'source.')
-                                
-                                # Apply same transformations as parent join
-                                nested_join_condition = nested_join_condition.replace('fact_vendas.', 'source.')
-                                import re
-                                nested_join_condition = re.sub(r'\b\w+\.source\.', 'source.', nested_join_condition)
-                                nested_join_condition = re.sub(r'\b\w+\.\w+\.(\w+\.\w+)', r'\1', nested_join_condition)
-                                nested_join_condition = re.sub(r'\b\w+\.(\w+\.\w+)', r'\1', nested_join_condition)
-                                nested_join_condition = nested_join_condition.replace('fact_', 'source.')
-                                
-                                nested_join_data['on'] = nested_join_condition
-                                logger.info(f"🔧 Generated nested join condition at depth {depth} (reference method): {nested_join_condition}")
-                            else:
-                                logger.warning(f"⚠️ No SQL ON condition or USING clause found for nested join '{nested_join.name}' at depth {depth} (reference method)")
-                            
-                            # Add nested join type if not default
-                            if hasattr(nested_join, 'join_type') and nested_join.join_type and nested_join.join_type != 'LEFT':
-                                nested_join_data['type'] = nested_join.join_type.lower()
-                            
-                            # RECURSIVELY process deeper nested joins
-                            if hasattr(nested_join, 'joins') and nested_join.joins and len(nested_join.joins) > 0:
-                                nested_join_data['joins'] = process_nested_joins_recursive(nested_join.joins, depth + 1)
-                            
-                            nested_joins_data.append(nested_join_data)
-                        
-                        return nested_joins_data
-                    
-                    if hasattr(join, 'joins') and join.joins and len(join.joins) > 0:
-                        join_data['joins'] = process_nested_joins_recursive(join.joins)
                     
                     # Note: 'description' field is not supported by Databricks metric view joins
                     # Only these fields are allowed: name, source, on, using, joins
@@ -4416,7 +4122,6 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
             yaml_string = yaml.dump(yaml_data, default_flow_style=False, sort_keys=False)
             
             logger.info(f"✅ Generated YAML for metric view from reference: {metric_view.name}")
-            logger.info(f"🔍 DEBUG (reference method): Generated YAML content:\n{yaml_string}")
             return yaml_string
             
         except Exception as e:
@@ -4459,10 +4164,6 @@ $$"""
             
             logger.info(f"🎯 Creating metric view: {full_name}")
             print(f"🎯 Creating metric view: {full_name}")
-            
-            # DEBUG: Log the exact SQL being executed
-            logger.info(f"🔍 DEBUG: Executing SQL:\n{create_sql}")
-            print(f"🔍 DEBUG: Executing SQL:\n{create_sql}")
             
             # Execute the SQL
             warehouse_id = self._get_warehouse_id()
@@ -4522,17 +4223,14 @@ $$"""
             else:
                 yaml_definition = self.generate_metric_view_yaml(metric_view, source_table_ref)
             
-            # Use the same syntax as create_metric_view (WITH METRICS LANGUAGE YAML)
-            alter_sql = f"""CREATE OR REPLACE VIEW {full_name}
-WITH METRICS
-LANGUAGE YAML
-AS $$
-{yaml_definition}
-$$"""
-            
-            # DEBUG: Log the exact SQL being executed
-            logger.info(f"🔍 DEBUG: Executing SQL:\n{alter_sql}")
-            print(f"🔍 DEBUG: Executing SQL:\n{alter_sql}")
+            # Use CREATE OR REPLACE VIEW
+            alter_sql = f"""
+            CREATE OR REPLACE VIEW {full_name}
+            USING YAML
+            OPTIONS (
+              yaml_definition = '{yaml_definition.replace("'", "''")}'
+            )
+            """
             
             # Execute the SQL
             warehouse_id = self._get_warehouse_id()
@@ -4572,56 +4270,8 @@ $$"""
             self._last_error = error_msg
             return False
     
-    def _parse_join_condition(self, sql_on: str) -> List[Dict[str, str]]:
-        """Parse SQL ON clause into structured conditions"""
-        import re
-        
-        conditions = []
-        if not sql_on or not sql_on.strip():
-            return conditions
-            
-        # Split by AND (case insensitive)
-        and_parts = re.split(r'\s+AND\s+', sql_on.strip(), flags=re.IGNORECASE)
-        
-        for part in and_parts:
-            part = part.strip()
-            if not part:
-                continue
-                
-            # Match patterns like "source.field = table.field" or "table1.field = table2.field"
-            # Support operators: =, !=, <>, <, >, <=, >=
-            match = re.match(r'(\w+)\.(\w+)\s*(=|!=|<>|<=|>=|<|>)\s*(\w+)\.(\w+)', part.strip())
-            if match:
-                left_table, left_field, operator, right_table, right_field = match.groups()
-                
-                # For metric views, convert 'source' table references to just field names
-                left_column = left_field if left_table.lower() == 'source' else f"{left_table}.{left_field}"
-                right_column = right_field if right_table.lower() == 'source' else f"{right_table}.{right_field}"
-                
-                # If left side is not source, swap them so source is always on left
-                if left_table.lower() != 'source' and right_table.lower() == 'source':
-                    left_column, right_column = right_column, left_column
-                    # Reverse operator if needed
-                    if operator == '<':
-                        operator = '>'
-                    elif operator == '>':
-                        operator = '<'
-                    elif operator == '<=':
-                        operator = '>='
-                    elif operator == '>=':
-                        operator = '<='
-                
-                conditions.append({
-                    'left': left_column,
-                    'operator': operator,
-                    'right': right_column
-                })
-                
-        return conditions
-
     def import_metric_view(self, catalog_name: str, schema_name: str, metric_view_name: str) -> Optional[MetricView]:
         """Import an existing metric view from Databricks"""
-        logger.info(f"🔧 IMPORT DEBUG: Starting import of metric view {metric_view_name}")
         try:
             if not self.client:
                 logger.warning("⚠️ No Databricks client - running in demo mode")
@@ -4638,175 +4288,20 @@ $$"""
                 logger.error(f"❌ Metric view not found: {full_name} - {e}")
                 return None
             
-            # Debug: Check what view_info contains
-            logger.info(f"🔍 DEBUG: view_info type: {type(view_info)}")
-            logger.info(f"🔍 DEBUG: view_info attributes: {dir(view_info)}")
-            if hasattr(view_info, 'view_definition'):
-                logger.info(f"🔍 DEBUG: view_definition exists: {bool(view_info.view_definition)}")
-                if view_info.view_definition:
-                    logger.info(f"🔍 DEBUG: view_definition preview: {view_info.view_definition[:200]}...")
-            else:
-                logger.info(f"🔍 DEBUG: view_definition attribute not found")
-            
-            # Parse the YAML definition from the view
-            yaml_definition = None
-            joins = []
-            dimensions = []
-            measures = []
-            source_table_ref = ""
-            
-            if hasattr(view_info, 'view_definition') and view_info.view_definition:
-                try:
-                    # Extract YAML from the view definition
-                    view_def = view_info.view_definition
-                    if 'AS $$' in view_def and '$$' in view_def:
-                        yaml_start = view_def.find('AS $$') + 5
-                        yaml_end = view_def.rfind('$$')
-                        yaml_content = view_def[yaml_start:yaml_end].strip()
-                        logger.info(f"🔧 IMPORT DEBUG: Extracted YAML content:\n{yaml_content}")
-                        
-                        import yaml
-                        yaml_data = yaml.safe_load(yaml_content)
-                        logger.info(f"🔧 IMPORT DEBUG: Parsed YAML data: {yaml_data}")
-                        
-                        if yaml_data:
-                            # Extract source table
-                            source_table_ref = yaml_data.get('source', '')
-                            
-                            # Extract joins
-                            if 'joins' in yaml_data:
-                                for join_data in yaml_data['joins']:
-                                    # Parse the ON clause into structured conditions
-                                    left_columns = []
-                                    right_columns = []
-                                    join_operators = []
-                                    sql_on = join_data.get('on', '')
-                                    
-                                    # Try to parse simple join conditions like "source.id = customer.id"
-                                    if sql_on and not join_data.get('using'):
-                                        parsed_conditions = self._parse_join_condition(sql_on)
-                                        logger.info(f"🔧 Parsing join condition: '{sql_on}' -> {parsed_conditions}")
-                                        if parsed_conditions:
-                                            left_columns = [cond['left'] for cond in parsed_conditions]
-                                            right_columns = [cond['right'] for cond in parsed_conditions]
-                                            join_operators = [cond['operator'] for cond in parsed_conditions]
-                                            logger.info(f"🔧 Parsed arrays: left={left_columns}, right={right_columns}, ops={join_operators}")
-                                    
-                                    join = MetricViewJoin(
-                                        name=join_data.get('name', ''),
-                                        sql_on=sql_on,
-                                        join_type=join_data.get('type', 'LEFT').upper(),
-                                        joined_table_name=join_data.get('source', ''),
-                                        using=join_data.get('using', None),
-                                        left_columns=left_columns,
-                                        right_columns=right_columns,
-                                        join_operators=join_operators
-                                    )
-                                    logger.info(f"🔧 Created join object: name={join.name}, left_columns={join.left_columns}, right_columns={join.right_columns}")
-                                    
-                                    # Handle nested joins for snowflake schema (recursively)
-                                    if 'joins' in join_data:
-                                        def parse_nested_joins_recursive(join_data_list, depth=0):
-                                            """Recursively parse nested joins at any depth"""
-                                            logger.debug(f"🔍 Parsing nested joins at depth {depth}, count: {len(join_data_list)}")
-                                            nested_joins = []
-                                            for i, nested_join_data in enumerate(join_data_list):
-                                                logger.debug(f"🔍 Processing join {i} at depth {depth}: {nested_join_data.get('name', 'unnamed')}")
-                                                # Parse nested join conditions
-                                                nested_left_columns = []
-                                                nested_right_columns = []
-                                                nested_join_operators = []
-                                                # Handle YAML quirk where 'on:' gets parsed as boolean True
-                                                nested_sql_on = nested_join_data.get('sql_on', nested_join_data.get('on', nested_join_data.get(True, '')))
-                                                
-                                                if nested_sql_on and not nested_join_data.get('using'):
-                                                    nested_parsed_conditions = self._parse_join_condition(nested_sql_on)
-                                                    if nested_parsed_conditions:
-                                                        nested_left_columns = [cond['left'] for cond in nested_parsed_conditions]
-                                                        nested_right_columns = [cond['right'] for cond in nested_parsed_conditions]
-                                                        nested_join_operators = [cond['operator'] for cond in nested_parsed_conditions]
-                                                
-                                                nested_join = MetricViewJoin(
-                                                    name=nested_join_data.get('name', ''),
-                                                    sql_on=nested_sql_on,
-                                                    join_type=nested_join_data.get('type', 'LEFT').upper(),
-                                                    joined_table_name=nested_join_data.get('source', ''),
-                                                    using=nested_join_data.get('using', None),
-                                                    left_columns=nested_left_columns,
-                                                    right_columns=nested_right_columns,
-                                                    join_operators=nested_join_operators
-                                                )
-                                                
-                                                # Recursively process deeper nested joins
-                                                if 'joins' in nested_join_data:
-                                                    logger.debug(f"🔍 Found nested joins in {nested_join_data.get('name', 'unnamed')} at depth {depth}, going deeper...")
-                                                    logger.debug(f"🔍 Nested join data: {nested_join_data['joins']}")
-                                                    try:
-                                                        nested_join.joins = parse_nested_joins_recursive(nested_join_data['joins'], depth + 1)
-                                                        logger.debug(f"🔍 Successfully processed {len(nested_join.joins)} nested joins for {nested_join_data.get('name', 'unnamed')}")
-                                                    except Exception as e:
-                                                        logger.error(f"❌ Error processing nested joins for {nested_join_data.get('name', 'unnamed')}: {e}")
-                                                        nested_join.joins = []
-                                                else:
-                                                    logger.debug(f"🔍 No nested joins found for {nested_join_data.get('name', 'unnamed')} at depth {depth}")
-                                                    nested_join.joins = []
-                                                
-                                                nested_joins.append(nested_join)
-                                            return nested_joins
-                                        
-                                        join.joins = parse_nested_joins_recursive(join_data['joins'], 1)
-                                    
-                                    joins.append(join)
-                            
-                            # Extract dimensions
-                            if 'dimensions' in yaml_data:
-                                for dim_data in yaml_data['dimensions']:
-                                    dimension = MetricViewDimension(
-                                        name=dim_data.get('name', ''),
-                                        expr=dim_data.get('expr', ''),
-                                        description=dim_data.get('comment', '')
-                                    )
-                                    dimensions.append(dimension)
-                            
-                            # Extract measures
-                            if 'measures' in yaml_data:
-                                for measure_data in yaml_data['measures']:
-                                    measure = MetricViewMeasure(
-                                        name=measure_data.get('name', ''),
-                                        expr=measure_data.get('expr', ''),
-                                        description=measure_data.get('comment', ''),
-                                        aggregation_type='CUSTOM'
-                                    )
-                                    measures.append(measure)
-                                    
-                        logger.info(f"🔍 Parsed YAML: {len(joins)} joins, {len(dimensions)} dimensions, {len(measures)} measures")
-                        
-                        # Debug: Show the parsed joins
-                        for i, join in enumerate(joins):
-                            logger.info(f"🔍 DEBUG: Join {i}: name='{join.name}', sql_on='{join.sql_on}', joined_table_name='{join.joined_table_name}'")
-                        
-                except Exception as yaml_error:
-                    logger.warning(f"⚠️ Could not parse YAML definition: {yaml_error}")
-            
-            # Create MetricView object with parsed data
+            # Create MetricView object
             metric_view = MetricView(
                 name=metric_view_name,
                 description=view_info.comment or "",
                 source_table_id="",  # Will need to be resolved
-                source_table=source_table_ref,
-                joins=joins,
-                dimensions=dimensions,
-                measures=measures,
                 tags={}  # Will be populated separately
             )
             
+            # Try to extract YAML definition if available
+            # This is a simplified approach - in practice, you might need to
+            # query the view definition and parse it
+            
             logger.info(f"✅ Imported metric view: {metric_view_name}")
             print(f"✅ Imported metric view: {metric_view_name}")
-            
-            # Debug: Show the final MetricView object
-            logger.info(f"🔍 DEBUG: Final MetricView joins count: {len(metric_view.joins)}")
-            for i, join in enumerate(metric_view.joins):
-                logger.info(f"🔍 DEBUG: Final Join {i}: {join.model_dump()}")
             
             return metric_view
             

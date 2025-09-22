@@ -226,7 +226,7 @@ class DataModelYAMLSerializer:
     @staticmethod
     def _join_to_dict(join: MetricViewJoin) -> Dict[str, Any]:
         """Convert join to dictionary"""
-        return {
+        join_dict = {
             'id': join.id,
             'name': join.name,
             'sql_on': join.sql_on,
@@ -241,8 +241,17 @@ class DataModelYAMLSerializer:
             'additional_conditions': join.additional_conditions,
             'broadcast_hint': join.broadcast_hint,
             'bucket_hint': join.bucket_hint,
-            'sort_merge_hint': join.sort_merge_hint
+            'sort_merge_hint': join.sort_merge_hint,
+            'using': join.using  # CRITICAL: Include USING clause
         }
+        
+        # CRITICAL: Include nested joins recursively
+        if join.joins and len(join.joins) > 0:
+            join_dict['joins'] = [
+                DataModelYAMLSerializer._join_to_dict(nested_join) for nested_join in join.joins
+            ]
+        
+        return join_dict
     
     @staticmethod
     def _traditional_view_to_dict(traditional_view: TraditionalView) -> Dict[str, Any]:
@@ -474,7 +483,7 @@ class DataModelYAMLSerializer:
         return MetricViewDimension(
             id=dim_dict.get('id'),
             name=dim_dict.get('name', ''),
-            expr=dim_dict.get('expression', ''),
+            expr=dim_dict.get('expression', dim_dict.get('expr', '')),  # Support both 'expression' and 'expr' fields
             description=dim_dict.get('description'),
             data_type=dim_dict.get('data_type')
         )
@@ -485,7 +494,7 @@ class DataModelYAMLSerializer:
         return MetricViewMeasure(
             id=measure_dict.get('id'),
             name=measure_dict.get('name', ''),
-            expr=measure_dict.get('expression', ''),
+            expr=measure_dict.get('expression', measure_dict.get('expr', '')),  # Support both 'expression' and 'expr' fields
             description=measure_dict.get('description'),
             aggregation_type=measure_dict.get('aggregation', 'SUM'),
             is_window_measure=measure_dict.get('is_window_measure', False),
@@ -502,6 +511,11 @@ class DataModelYAMLSerializer:
     @staticmethod
     def _dict_to_join(join_dict: Dict[str, Any]) -> MetricViewJoin:
         """Convert dictionary to MetricViewJoin"""
+        # CRITICAL: Parse nested joins recursively
+        nested_joins = []
+        for nested_join_dict in join_dict.get('joins', []):
+            nested_joins.append(DataModelYAMLSerializer._dict_to_join(nested_join_dict))
+        
         return MetricViewJoin(
             id=join_dict.get('id'),
             name=join_dict.get('name', ''),
@@ -517,7 +531,9 @@ class DataModelYAMLSerializer:
             additional_conditions=join_dict.get('additional_conditions'),
             broadcast_hint=join_dict.get('broadcast_hint', False),
             bucket_hint=join_dict.get('bucket_hint'),
-            sort_merge_hint=join_dict.get('sort_merge_hint', False)
+            sort_merge_hint=join_dict.get('sort_merge_hint', False),
+            using=join_dict.get('using'),  # CRITICAL: Include USING clause
+            joins=nested_joins if nested_joins else None  # CRITICAL: Include nested joins
         )
     
     @staticmethod

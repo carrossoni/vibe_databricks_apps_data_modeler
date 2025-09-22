@@ -140,3 +140,4 @@ else
     echo -e "   ${RED}Fix errors before deploying to GitHub.${NC}"
     exit 1
 fi
+
