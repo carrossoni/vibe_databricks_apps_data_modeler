@@ -92,11 +92,12 @@ The deployment script will:
 - Validate your Databricks configuration
 - Create the Databricks App (if it doesn't exist)
 - Deploy the source code using Databricks Bundles
-- Configure proper permissions and scopes (Configure the required scopes described above 
+- Configure proper permissions and scopes (Configure the required scopes described above)
 - Start the app and provide the access URL
 
 ### 5. Configure OBO in the APP for UC Integration
 
+```bash
 Before accessing the APP configure the OBO (On Behalf Of) settings (in preview) in the Edit -> Configure
 
 ### 6. Access the Application
