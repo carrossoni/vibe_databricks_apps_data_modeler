@@ -99,7 +99,7 @@ The deployment script will:
 
 ```bash
 Before accessing the APP configure the OBO (On Behalf Of) settings (in preview) in the Edit -> Configure
-
+```
 ### 6. Access the Application
 
 After successful deployment, the script will provide the app URL. Navigate to the URL in your browser to start using the Data Modeler.
