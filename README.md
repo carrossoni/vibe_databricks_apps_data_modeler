@@ -89,21 +89,19 @@ The deployment script will:
 - Validate your Databricks configuration
 - Create the Databricks App (if it doesn't exist)
 - Deploy the source code using Databricks Bundles
-- Configure proper permissions and scopes
+- Configure proper permissions and scopes (Configure the required scopes described above)
 - Start the app and provide the access URL
 
-### 4. Access the Application
+### 5. Configure OBO in the APP for UC Integration
+
+```bash
+Before accessing the APP configure the OBO (On Behalf Of) settings (in preview) in the Edit -> Configure
+```
+### 6. Access the Application
 
 After successful deployment, the script will provide the app URL. Navigate to the URL in your browser to start using the Data Modeler.
 
 ## 🔧 Configuration
-
-### Environment Variables
-
-The app can be configured using the following environment variables:
-
-- `FLASK_ENV`: Set to `production` for production deployment (default)
-- `PYTHONPATH`: Python path configuration (default: `.:backend`)
 
 ### App Configuration Files
 
