@@ -1368,7 +1368,11 @@ class DatabricksUnityService:
                         for change in changes:
                             alter_statements.append(f"ALTER TABLE {full_name} ALTER COLUMN {field_name} {change};")
             
-            # 4. DROP columns that no longer exist
+            # 4. Handle constraints FIRST (especially FK drops before column drops)
+            constraint_statements = self._generate_constraint_alter_statements(data_table, catalog_name, schema_name, current_table_info, all_tables)
+            alter_statements.extend(constraint_statements)
+            
+            # 5. DROP columns that no longer exist (AFTER dropping FK constraints that reference them)
             columns_to_drop = []
             for col_name in current_columns:
                 if col_name not in desired_columns:
@@ -1405,7 +1409,7 @@ class DatabricksUnityService:
             for col_name in columns_to_drop:
                 alter_statements.append(f"ALTER TABLE {full_name} DROP COLUMN {col_name};")
             
-            # 4.5. Check table comment changes
+            # 6. Check table comment changes
             current_table_comment = current_table_info.comment or ""
             desired_table_comment = data_table.comment or ""
             if current_table_comment != desired_table_comment:
@@ -1415,7 +1419,7 @@ class DatabricksUnityService:
                 print(f"   Desired: '{desired_table_comment}'")
                 alter_statements.append(f"ALTER TABLE {full_name} SET TBLPROPERTIES ('comment' = '{desired_table_comment}');")
             
-            # 5. Handle liquid clustering changes
+            # 7. Handle liquid clustering changes
             if hasattr(data_table, 'cluster_by_auto'):
                 current_cluster_enabled = self.check_liquid_clustering_enabled(catalog_name, schema_name, data_table.name)
                 desired_cluster_enabled = data_table.cluster_by_auto
@@ -1427,10 +1431,6 @@ class DatabricksUnityService:
                     else:
                         logger.info(f"🔗 Disabling CLUSTER BY AUTO for: {full_name}")
                         alter_statements.append(f"ALTER TABLE {full_name} CLUSTER BY NONE;")
-            
-            # 6. Handle constraints (PK, FK)
-            constraint_statements = self._generate_constraint_alter_statements(data_table, catalog_name, schema_name, current_table_info, all_tables)
-            alter_statements.extend(constraint_statements)
             
             # 6. Handle Primary Key propagation to Foreign Keys
             self._propagate_pk_changes_to_fks(data_table, all_tables)

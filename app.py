@@ -49,43 +49,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def get_databricks_client():
-    """Get authenticated Databricks client using user or app credentials"""
+    """Get authenticated Databricks client using user or app credentials - robust version"""
     try:
         # Prioritize user authorization (on-behalf-of) when available
         user_token = request.headers.get('x-forwarded-access-token') if request else None
-        logger.info(f"🔍 App.py checking for user token: {'Found' if user_token else 'Not found'}")
+        logger.info(f"🔍 App.py checking for user {user_token[:10] + '...' if user_token else 'REDACTED_SECRET'}")
         
         if user_token:
             logger.info("🔑 Using user authorization (on-behalf-of)")
             host = os.getenv('DATABRICKS_SERVER_HOSTNAME') or os.getenv('DATABRICKS_HOST')
             if host:
-                # Temporarily clear environment variables to avoid conflicts
-                original_client_id = os.environ.pop('DATABRICKS_CLIENT_ID', None)
-                original_client_secret = os.environ.pop('DATABRICKS_CLIENT_SECRET', None)
-                original_host = os.environ.pop('DATABRICKS_HOST', None)
-                
                 try:
-                    # Create client with ONLY user token using PAT auth type for OBO
+                    # Create client directly without env var manipulation to avoid race conditions
                     client = WorkspaceClient(host=host, token=user_token, auth_type="pat")
                     logger.info("✅ Successfully created user-authenticated client (OBO)")
                     return client
                 except Exception as e:
                     logger.error(f"Failed to create OBO client: {e}")
-                finally:
-                    # Restore environment variables
-                    if original_client_id:
-                        os.environ['DATABRICKS_CLIENT_ID'] = original_client_id
-                    if original_client_secret:
-                        os.environ['DATABRICKS_CLIENT_SECRET'] = original_client_secret
-                    if original_host:
-                        os.environ['DATABRICKS_HOST'] = original_host
         
-        # Fallback: Check if we're running in Databricks Apps environment with service principal
+        # Fallback: Service principal authentication
         client_id = os.getenv('DATABRICKS_CLIENT_ID')
         client_secret = os.getenv('DATABRICKS_CLIENT_SECRET')
         
         if client_id and client_secret:
-            # Use app authorization (service principal)
             logger.info("🔧 Using app authorization (service principal)")
             host = os.getenv('DATABRICKS_SERVER_HOSTNAME') or os.getenv('DATABRICKS_HOST')
             try:

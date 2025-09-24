@@ -324,44 +324,31 @@ def _validate_traditional_view_sql(sql_query: str) -> str:
 
 
 def get_sdk_client():
-    """Get Databricks SDK client with OBO authentication"""
+    """Get Databricks SDK client - robust version prioritizing injected client"""
     try:
-        # First, try to use the client injected by the main app
+        # ALWAYS try the injected client first - this is the most reliable
         if hasattr(request, 'databricks_client') and request.databricks_client:
-            logger.info("✅ Using pre-authenticated client from request context")
+            logger.info("✅ Using pre-authenticated client from app.py injection")
             return request.databricks_client
         
-        # Fallback: Try direct authentication
-        user_token = request.headers.get('x-forwarded-access-token') if request else None
-        logger.info(f"🔍 DEBUG: User token found: {'Yes' if user_token else 'No'}")
+        logger.warning("⚠️ No injected client available, falling back to direct authentication")
         
+        # Fallback: Direct user token authentication (no env var manipulation)
+        user_token = request.headers.get('x-forwarded-access-token') if request else None
         if user_token:
-            logger.info("🔑 Using user authorization (on-behalf-of)")
+            logger.info("🔑 Attempting direct user authentication")
             host = os.getenv('DATABRICKS_SERVER_HOSTNAME') or os.getenv('DATABRICKS_HOST')
             if host:
-                # Temporarily clear environment variables to avoid conflicts
-                original_client_id = os.environ.pop('DATABRICKS_CLIENT_ID', None)
-                original_client_secret = os.environ.pop('DATABRICKS_CLIENT_SECRET', None)
-                original_host = os.environ.pop('DATABRICKS_HOST', None)
-                
                 try:
-                    # Create client with ONLY user token using PAT auth type for OBO
+                    # Create client directly without manipulating env vars
                     client = WorkspaceClient(host=host, token=user_token, auth_type="pat")
-                    logger.info("✅ Successfully created user-authenticated client (OBO)")
+                    logger.info("✅ Successfully created fallback user client")
                     return client
                 except Exception as e:
-                    logger.error(f"Failed to create OBO client: {e}")
-                finally:
-                    # Always restore environment variables
-                    if original_client_id:
-                        os.environ['DATABRICKS_CLIENT_ID'] = original_client_id
-                    if original_client_secret:
-                        os.environ['DATABRICKS_CLIENT_SECRET'] = original_client_secret
-                    if original_host:
-                        os.environ['DATABRICKS_HOST'] = original_host
+                    logger.error(f"Failed to create fallback user client: {e}")
         
-        # Fallback to service principal authentication
-        logger.info("🔑 Falling back to service principal authentication")
+        # Service principal fallback (read-only access to env vars)
+        logger.info("🔑 Attempting service principal authentication")
         client_id = os.getenv('DATABRICKS_CLIENT_ID')
         client_secret = os.getenv('DATABRICKS_CLIENT_SECRET')
         host = os.getenv('DATABRICKS_SERVER_HOSTNAME') or os.getenv('DATABRICKS_HOST')
@@ -378,34 +365,12 @@ def get_sdk_client():
                 return client
             except Exception as e:
                 logger.error(f"Failed to create service principal client: {e}")
-                # Continue to next fallback
         
-        # Final fallback to environment variables (for local development)
-        host = os.getenv('DATABRICKS_HOST')
-        token = os.getenv('DATABRICKS_TOKEN')
-        
-        if host and token:
-            try:
-                client = WorkspaceClient(host=host, token=token)
-                logger.info("✅ Successfully created client from env vars")
-                return client
-            except Exception as e:
-                logger.error(f"Failed to create client from env vars: {e}")
-                # Continue to next fallback
-        
-        # Try default profile as last resort
-        try:
-            client = WorkspaceClient()
-            logger.info("✅ Successfully created client from default profile")
-            return client
-        except:
-            pass
-        
-        logger.error("❌ No valid authentication method available")
+        logger.error("❌ All authentication methods failed")
         return None
         
     except Exception as e:
-        logger.error(f"❌ Error creating Databricks client: {e}")
+        logger.error(f"❌ Critical error in get_sdk_client: {e}")
         import traceback
         traceback.print_exc()
         return None
