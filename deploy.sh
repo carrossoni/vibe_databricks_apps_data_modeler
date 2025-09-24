@@ -438,15 +438,20 @@ if databricks apps get "$APP_NAME" &> /dev/null 2>&1; then
     APP_INFO=$(databricks apps get "$APP_NAME")
     echo "$APP_INFO" | grep -E "(name|status|url)" || echo "$APP_INFO"
     
-    # Start the app if it's not running
-    APP_STATUS=$(echo "$APP_INFO" | grep -oE '"status":\s*"[^"]+' | cut -d'"' -f4)
-    if [ "$APP_STATUS" != "RUNNING" ]; then
+    # Check if app is already running by looking for ACTIVE state or running status
+    APP_IS_RUNNING=$(echo "$APP_INFO" | grep -q '"message":"App has status: App is running"' && echo "true" || echo "false")
+    COMPUTE_IS_ACTIVE=$(echo "$APP_INFO" | grep -q '"state":"ACTIVE"' && echo "true" || echo "false")
+    
+    if [ "$APP_IS_RUNNING" = "true" ] || [ "$COMPUTE_IS_ACTIVE" = "true" ]; then
+        echo "✅ App is already running"
+    else
         echo ""
         echo "▶️  Starting app..."
-        databricks apps start "$APP_NAME"
-        echo "✅ App started successfully"
-    else
-        echo "✅ App is already running"
+        if databricks apps start "$APP_NAME" 2>/dev/null; then
+            echo "✅ App started successfully"
+        else
+            echo "⚠️  App may already be running or starting"
+        fi
     fi
     
     # Get app URL

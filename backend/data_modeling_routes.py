@@ -324,7 +324,7 @@ def _validate_traditional_view_sql(sql_query: str) -> str:
 
 
 def get_sdk_client():
-    """Get Databricks SDK client - simplified version without env var manipulation"""
+    """Get Databricks SDK client with OBO authentication"""
     try:
         # First, try to use the client injected by the main app
         if hasattr(request, 'databricks_client') and request.databricks_client:
@@ -352,7 +352,7 @@ def get_sdk_client():
                 except Exception as e:
                     logger.error(f"Failed to create OBO client: {e}")
                 finally:
-                    # Restore environment variables
+                    # Always restore environment variables
                     if original_client_id:
                         os.environ['DATABRICKS_CLIENT_ID'] = original_client_id
                     if original_client_secret:

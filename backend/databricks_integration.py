@@ -125,6 +125,60 @@ class DatabricksUnityService:
             logger.error(f"Error getting table info for {full_name}: {e}")
             return None
     
+    def check_liquid_clustering_enabled(self, catalog_name: str, schema_name: str, table_name: str) -> bool:
+        """Check if a table has automatic liquid clustering enabled"""
+        try:
+            full_name = f"{catalog_name}.{schema_name}.{table_name}"
+            
+            # Get warehouse ID for SQL execution
+            warehouse_id = self._get_warehouse_id()
+            if not warehouse_id:
+                logger.warning(f"⚠️ No warehouse available for SQL queries, cannot check clustering for {full_name}")
+                return False
+            
+            # Use DESCRIBE TABLE EXTENDED to get table properties
+            sql = f"DESCRIBE TABLE EXTENDED {full_name}"
+            logger.info(f"🔍 Checking liquid clustering for {full_name}")
+            
+            result = self.client.statement_execution.execute_statement(
+                warehouse_id=warehouse_id,
+                statement=sql,
+                wait_timeout="30s"
+            )
+            
+            if result.status.state != StatementState.SUCCEEDED:
+                logger.error(f"SQL query failed: {result.status}")
+                return False
+            
+            # Parse the results to find table properties
+            if result.result and result.result.data_array:
+                logger.info(f"🔍 DESCRIBE TABLE EXTENDED results for {full_name}:")
+                for row in result.result.data_array:
+                    if len(row) >= 2:
+                        col_name = str(row[0]).strip() if row[0] else ""
+                        col_value = str(row[1]).strip() if row[1] else ""
+                        logger.info(f"   {col_name}: {col_value}")
+                        
+                        # Look for clusterByAuto in table properties (case insensitive)
+                        if col_name.lower() == "clusterbyauto":
+                            value = col_value.lower()
+                            logger.info(f"🔗 Found clusterByAuto: {value}")
+                            return value == "true"
+                        
+                        # Also check if it's in the table properties section
+                        # Sometimes it appears as a key-value pair in a properties string
+                        if "clusterbyauto" in col_value.lower():
+                            logger.info(f"🔗 Found clusterByAuto in properties string: {col_value}")
+                            # Parse the properties string to find clusterByAuto=true
+                            if "clusterbyauto=true" in col_value.lower() or "clusterbyauto:true" in col_value.lower():
+                                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking liquid clustering for {full_name}: {e}")
+            return False
+    
     def get_table_column_details_via_sql(self, catalog_name: str, schema_name: str, table_name: str) -> Dict[str, Dict[str, Any]]:
         """Get detailed column information using SQL DESCRIBE TABLE"""
         try:
@@ -950,12 +1004,45 @@ class DatabricksUnityService:
 
             if table_exists:
                 print(f"🔄 TABLE EXISTS - GENERATING ALTER DDL (warnings will be checked)")
-                logger.info(f"🔄 Table {full_name} exists, generating ALTER statements")
-                return self._generate_alter_table_ddl(data_table, catalog_name, schema_name, all_tables, include_tags=True)
+                logger.info(f"🔄 Table {full_name} exists, generating ALTER statements with commented CREATE")
+                
+                # For existing tables, include both commented CREATE and ALTER statements
+                create_ddl = self._generate_create_table_ddl(data_table, catalog_name, schema_name, all_tables, include_tags=True)
+                alter_ddl = self._generate_alter_table_ddl(data_table, catalog_name, schema_name, all_tables, include_tags=True)
+                
+                # Comment out the CREATE TABLE statement
+                commented_create = "\n".join([f"-- {line}" if line.strip() else "--" for line in create_ddl.split("\n")])
+                
+                # Combine with header
+                combined_ddl = []
+                combined_ddl.append(f"-- DDL for {data_table.name}")
+                combined_ddl.append(f"-- Table exists, showing current CREATE statement (commented) and ALTER statements")
+                combined_ddl.append("")
+                combined_ddl.append("-- Current CREATE TABLE statement (for reference):")
+                combined_ddl.append(commented_create)
+                
+                if alter_ddl.strip():
+                    combined_ddl.append("")
+                    combined_ddl.append("-- ALTER statements to apply changes:")
+                    combined_ddl.append(alter_ddl)
+                else:
+                    combined_ddl.append("")
+                    combined_ddl.append("-- No changes needed - table structure matches the model")
+                
+                return "\n".join(combined_ddl)
             else:
                 print(f"🆕 TABLE DOES NOT EXIST - GENERATING CREATE DDL (no warnings for new tables)")
                 logger.info(f"🆕 Table {full_name} does not exist, generating CREATE statement")
-                return self._generate_create_table_ddl(data_table, catalog_name, schema_name, all_tables, include_tags=True)
+                create_ddl = self._generate_create_table_ddl(data_table, catalog_name, schema_name, all_tables, include_tags=True)
+                
+                # For new tables, add header
+                ddl_with_header = []
+                ddl_with_header.append(f"-- DDL for {data_table.name}")
+                ddl_with_header.append(f"-- New table - CREATE statement")
+                ddl_with_header.append("")
+                ddl_with_header.append(create_ddl)
+                
+                return "\n".join(ddl_with_header)
 
         except Exception as e:
             logger.error(f"Error generating DDL for {data_table.name}: {e}")
@@ -1076,6 +1163,11 @@ class DatabricksUnityService:
                     logger.warning(f"⚠️ Could not resolve FK reference for {fk_field.name}: ref_table={ref_table_name}, ref_field={ref_field_name}")
 
         ddl += "\n)"
+
+        # Add liquid clustering if enabled
+        if hasattr(data_table, 'cluster_by_auto') and data_table.cluster_by_auto:
+            ddl += "\nCLUSTER BY AUTO"
+            logger.info(f"🔗 Adding CLUSTER BY AUTO to {data_table.name}")
 
         # Add table properties - REMOVE location for managed tables
         if data_table.file_format and data_table.file_format != "DELTA":
@@ -1323,7 +1415,20 @@ class DatabricksUnityService:
                 print(f"   Desired: '{desired_table_comment}'")
                 alter_statements.append(f"ALTER TABLE {full_name} SET TBLPROPERTIES ('comment' = '{desired_table_comment}');")
             
-            # 5. Handle constraints (PK, FK)
+            # 5. Handle liquid clustering changes
+            if hasattr(data_table, 'cluster_by_auto'):
+                current_cluster_enabled = self.check_liquid_clustering_enabled(catalog_name, schema_name, data_table.name)
+                desired_cluster_enabled = data_table.cluster_by_auto
+                
+                if current_cluster_enabled != desired_cluster_enabled:
+                    if desired_cluster_enabled:
+                        logger.info(f"🔗 Enabling CLUSTER BY AUTO for: {full_name}")
+                        alter_statements.append(f"ALTER TABLE {full_name} CLUSTER BY AUTO;")
+                    else:
+                        logger.info(f"🔗 Disabling CLUSTER BY AUTO for: {full_name}")
+                        alter_statements.append(f"ALTER TABLE {full_name} CLUSTER BY NONE;")
+            
+            # 6. Handle constraints (PK, FK)
             constraint_statements = self._generate_constraint_alter_statements(data_table, catalog_name, schema_name, current_table_info, all_tables)
             alter_statements.extend(constraint_statements)
             
@@ -2715,7 +2820,10 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
                             ref_field = next((f for f in ref_table.fields if f.id == fk_ref.referenced_field_id), None)
                             if ref_field:
                                 logger.info(f"🔗 Adding foreign key constraint: {constraint_name}")
-                                ref_full_name = f"{catalog_name}.{schema_name}.{ref_table.name}"
+                                # Use the referenced table's actual catalog and schema, not the current table's
+                                ref_catalog = ref_table.catalog_name if ref_table.catalog_name else catalog_name
+                                ref_schema = ref_table.schema_name if ref_table.schema_name else schema_name
+                                ref_full_name = f"{ref_catalog}.{ref_schema}.{ref_table.name}"
                                 statements.append(f"ALTER TABLE {full_name} ADD CONSTRAINT {constraint_name} FOREIGN KEY ({fk_field.name}) REFERENCES {ref_full_name}({ref_field.name});")
                 
                 # Log if no FK changes needed
@@ -3049,6 +3157,17 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
         # Convert character width to pixels (approximate 8px per character)
         calculated_width = max(280, min(500, 150 + max_field_width * 8))
         
+        # Check if liquid clustering is enabled for this table
+        cluster_by_auto = False
+        try:
+            cluster_by_auto = self.check_liquid_clustering_enabled(
+                table_info.catalog_name, table_info.schema_name, table_info.name
+            )
+            if cluster_by_auto:
+                logger.info(f"🔗 Detected CLUSTER BY AUTO enabled for {table_info.name}")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not check liquid clustering for {table_info.name}: {e}")
+
         return DataTable(
             name=table_info.name,
             schema_name=table_info.schema_name,
@@ -3058,6 +3177,7 @@ REFERENCES {full_table_name}({constraint['ref_field_name']})"""
             table_type=table_info.table_type.value if table_info.table_type else "MANAGED",
             storage_location=table_info.storage_location,
             file_format=table_info.data_source_format.value if table_info.data_source_format else "DELTA",
+            cluster_by_auto=cluster_by_auto,  # Set clustering status from detection
             fields=fields,
             position_x=x,
             position_y=y,

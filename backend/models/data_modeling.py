@@ -305,6 +305,9 @@ class DataTable(BaseModel):
     storage_location: Optional[str] = Field(default=None, description="Storage location for external tables")
     file_format: Optional[str] = Field(default="DELTA", description="File format (DELTA, PARQUET, etc.)")
     
+    # Liquid clustering properties
+    cluster_by_auto: bool = Field(default=False, description="Enable automatic liquid clustering")
+    
     # UI positioning for ERD
     position_x: float = Field(default=100.0, description="X position in ERD canvas")
     position_y: float = Field(default=100.0, description="Y position in ERD canvas")
