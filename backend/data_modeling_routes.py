@@ -378,6 +378,7 @@ def get_sdk_client():
                 return client
             except Exception as e:
                 logger.error(f"Failed to create service principal client: {e}")
+                # Continue to next fallback
         
         # Final fallback to environment variables (for local development)
         host = os.getenv('DATABRICKS_HOST')
@@ -390,6 +391,7 @@ def get_sdk_client():
                 return client
             except Exception as e:
                 logger.error(f"Failed to create client from env vars: {e}")
+                # Continue to next fallback
         
         # Try default profile as last resort
         try:
