@@ -32,7 +32,7 @@ databricks auth login
 From the `databricks-app` directory:
 
 ```bash
-./deploy
+./deploy.sh
 ```
 or
 ```bash
