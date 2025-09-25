@@ -94,7 +94,7 @@ The deployment script will:
 - Configure proper permissions and scopes
 - Start the app and provide the access URL
 
-### 4. Access the Application
+### 4. Before Access the Application Configure Oauth Scopes
 
 Add the required scopes using the On Behalf Feature (preview):
 
