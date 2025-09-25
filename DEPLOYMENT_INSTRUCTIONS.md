@@ -30,6 +30,11 @@ databricks auth login
 ### 2. Deploy the App
 
 From the `databricks-app` directory:
+
+```bash
+./deploy
+```
+or
 ```bash
 databricks bundle deploy
 ```
