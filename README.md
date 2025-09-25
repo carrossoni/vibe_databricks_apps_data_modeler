@@ -52,9 +52,11 @@ Before deploying the Bricks Data Modeler, ensure you have:
 
 The app requires the following OAuth scopes:
 
-- `sql`: Execute SQL statements and manage SQL resources
-- `iam.current-user:read`: Read current user information
-- `iam.access-control:read`: Read access control information
+- `sql` Allow the app to execute SQL and manage SQL related resources in Databricks.
+- `catalog.catalogs:read` Allows the app to read catalogs in Unity Catalog.
+- `catalog.schemas:read` Allows the app to read schemas in Unity Catalog.
+- `catalog.tables:read` Allows the app to read tables in Unity Catalog.
+
 
 ## 🚀 Quick Start
 
@@ -94,16 +96,18 @@ The deployment script will:
 
 ### 4. Access the Application
 
+Add the required scopes using the On Behalf Feature (preview):
+
+- `sql` Allow the app to execute SQL and manage SQL related resources in Databricks.
+- `catalog.catalogs:read` Allows the app to read catalogs in Unity Catalog.
+- `catalog.schemas:read` Allows the app to read schemas in Unity Catalog.
+- `catalog.tables:read` Allows the app to read tables in Unity Catalog.
+
+### 5. Access the Application
+
 After successful deployment, the script will provide the app URL. Navigate to the URL in your browser to start using the Data Modeler.
 
 ## 🔧 Configuration
-
-### Environment Variables
-
-The app can be configured using the following environment variables:
-
-- `FLASK_ENV`: Set to `production` for production deployment (default)
-- `PYTHONPATH`: Python path configuration (default: `.:backend`)
 
 ### App Configuration Files
 
@@ -224,14 +228,7 @@ This project is licensed under the Apache License 2.0 - see the LICENSE file for
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## 📞 Support
-
-For support and questions:
-- Create an issue in the GitHub repository
-- Check the Databricks Community forums
-- Review Databricks Apps documentation
+Contributions are welcome! Please feel free to submit a Pull Request
 
 ---
 
